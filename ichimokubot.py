@@ -24,7 +24,8 @@ SYMBOLS = [
 ]
 TIMEFRAMES = ["1h", "4h", "1d"]
 LIMIT = 200
-CHECK_INTERVAL_MINUTES = 30
+# run every 1 hour since lowest TF = 1h
+CHECK_INTERVAL_HOURS = 1
 # ============================================
 
 logging.basicConfig(level=logging.INFO)
@@ -146,9 +147,9 @@ def main():
     dp.add_handler(CommandHandler("status", status))
     dp.add_handler(CommandHandler("test", test))
 
-    # Scheduler for alerts every X minutes, with pytz timezone
+    # Scheduler runs every 1 hour and checks ALL timeframes
     scheduler = BackgroundScheduler(timezone=pytz.UTC)
-    scheduler.add_job(check_and_alert, "interval", minutes=CHECK_INTERVAL_MINUTES, args=[updater.bot])
+    scheduler.add_job(check_and_alert, "interval", hours=CHECK_INTERVAL_HOURS, args=[updater.bot])
     scheduler.start()
 
     updater.start_polling()
