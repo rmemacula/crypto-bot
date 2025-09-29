@@ -1,18 +1,6 @@
-# Python cache
+venv/
 __pycache__/
 *.pyc
-
-# Virtual environment
-venv/
-env/
-.venv/
-
-# Logs
-*.log
-
-# Environment variables / secrets
 .env
-
-# OS files
 .DS_Store
 Thumbs.db
