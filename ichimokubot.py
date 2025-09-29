@@ -9,7 +9,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 # ================== CONFIG ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID"))
+CHAT_ID = os.getenv("CHAT_ID")
+try:
+    CHAT_ID = int(CHAT_ID) if CHAT_ID else None
+except ValueError:
+    print(f"⚠️ Invalid CHAT_ID value: {CHAT_ID}")
+    CHAT_ID = None
+
 SYMBOLS = [
     "BTC/USDT", "ETH/USDT", "XRP/USDT", "BNB/USDT", "SOL/USDT",
     "DOGE/USDT", "TRX/USDT", "ADA/USDT", "HYPE/USDT",
