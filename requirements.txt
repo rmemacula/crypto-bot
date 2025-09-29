@@ -1,7 +1,7 @@
-ccxt
-pandas
-numpy
+ccxt==4.2.21
+pandas==2.2.2
+numpy==1.26.4
 python-telegram-bot==13.15
-apscheduler
-pytz
-ta
+apscheduler==3.10.4
+pytz==2024.1
+ta==0.11.0
