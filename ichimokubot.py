@@ -4,6 +4,7 @@ import ccxt
 import os
 import numpy as np
 import pytz
+import ta
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -54,6 +55,10 @@ def ichimoku(df):
     df["senkou_span_b"] = ((high_52 + low_52) / 2).shift(26)
 
     df["chikou_span"] = df["close"].shift(-26)
+
+    # ✅ RSI
+    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
+
     return df
 
 def analyze_ichimoku(df):
@@ -64,7 +69,9 @@ def analyze_ichimoku(df):
 
     lagging = latest["chikou_span"]
     close = latest["close"]
+    rsi = latest["rsi"]
     signal = "Neutral"
+    lagging_info = ""
 
     # ✅ Buy: Close above cloud + Tenkan > Kijun + Lagging above cloud
     if close > cloud_top and latest["tenkan_sen"] > latest["kijun_sen"] and lagging > cloud_top:
@@ -74,16 +81,16 @@ def analyze_ichimoku(df):
     elif close < cloud_bottom and latest["tenkan_sen"] < latest["kijun_sen"] and lagging < cloud_bottom:
         signal = "SELL"
 
-    # Append Lagging Span info for clarity
+    # Lagging Span info
     if not np.isnan(lagging):
         if lagging > cloud_top:
-            signal += " (Lagging ABOVE cloud)"
+            lagging_info = "(Lagging ABOVE cloud)"
         elif lagging < cloud_bottom:
-            signal += " (Lagging BELOW cloud)"
+            lagging_info = "(Lagging BELOW cloud)"
         else:
-            signal += " (Lagging INSIDE cloud)"
+            lagging_info = "(Lagging INSIDE cloud)"
 
-    return signal, close
+    return signal, close, lagging_info, rsi
 
 # ---------------- ALERT FUNCTION -------------------
 def check_and_alert(context: CallbackContext):
@@ -93,12 +100,17 @@ def check_and_alert(context: CallbackContext):
             try:
                 df = fetch_ohlcv(symbol, tf)
                 df = ichimoku(df)
-                signal, price = analyze_ichimoku(df)
+                signal, price, lagging_info, rsi = analyze_ichimoku(df)
                 prev_signal = last_signals[symbol][tf]
 
                 # Only notify when signal just formed
                 if signal != "Neutral" and signal != prev_signal:
-                    msg = f"🚨 {symbol} ({tf})\nSignal: {signal}\nPrice: {price:.4f} USDT"
+                    msg = (
+                        f"🚨 {symbol} ({tf})\n"
+                        f"Signal: {signal} {lagging_info}\n"
+                        f"RSI: {rsi:.1f}\n"
+                        f"Price: {price:.4f} USDT"
+                    )
                     context.bot.send_message(chat_id=CHAT_ID, text=msg)
                     last_signals[symbol][tf] = signal
 
@@ -116,8 +128,8 @@ def status(update, context):
             try:
                 df = fetch_ohlcv(symbol, tf)
                 df = ichimoku(df)
-                signal, price = analyze_ichimoku(df)
-                msg_list.append(f"{symbol} ({tf}): {signal} @ {price:.4f} USDT")
+                signal, price, lagging_info, rsi = analyze_ichimoku(df)
+                msg_list.append(f"{symbol} ({tf}): {signal} {lagging_info} | RSI {rsi:.1f} @ {price:.4f} USDT")
             except:
                 msg_list.append(f"{symbol} ({tf}): Error fetching")
     update.message.reply_text("\n".join(msg_list))
