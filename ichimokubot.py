@@ -1,159 +1,106 @@
-import logging
-import pandas as pd
 import ccxt
-import os
+import pandas as pd
 import numpy as np
-import pytz
 import ta
-from telegram.ext import Updater, CommandHandler, CallbackContext
+import os
+import pytz
+from datetime import datetime
+from telegram import Bot
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# ================== CONFIG ==================
+# =========================
+# CONFIG
+# =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-try:
-    CHAT_ID = int(CHAT_ID) if CHAT_ID else None
-except ValueError:
-    print(f"⚠️ Invalid CHAT_ID value: {CHAT_ID}")
-    CHAT_ID = None
-
-SYMBOLS = [
-    "BTC/USDT", "ETH/USDT", "XRP/USDT", "BNB/USDT", "SOL/USDT",
-    "DOGE/USDT", "TRX/USDT", "ADA/USDT", "HYPE/USDT",
-    "LINK/USDT", "AVAX/USDT", "XLM/USDT", "SUI/USDT"
-]
-TIMEFRAMES = ["1h", "4h", "1d"]
-LIMIT = 200
-# run every 1 hour since lowest TF = 1h
-CHECK_INTERVAL_HOURS = 1
-# ============================================
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+bot = Bot(token=TELEGRAM_TOKEN)
 
 exchange = ccxt.binance()
-last_signals = {s: {tf: None for tf in TIMEFRAMES} for s in SYMBOLS}
 
-# ---------------- INDICATOR FUNCTIONS ----------------
-def fetch_ohlcv(symbol, timeframe, limit=LIMIT):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    return df
+symbols = ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT"]  # Add coins here
+timeframes = ["1h", "4h", "1d"]  # All timeframes to check
 
-def ichimoku(df):
-    high_9 = df["high"].rolling(9).max()
-    low_9 = df["low"].rolling(9).min()
-    df["tenkan_sen"] = (high_9 + low_9) / 2
-
-    high_26 = df["high"].rolling(26).max()
-    low_26 = df["low"].rolling(26).min()
-    df["kijun_sen"] = (high_26 + low_26) / 2
-
-    high_52 = df["high"].rolling(52).max()
-    low_52 = df["low"].rolling(52).min()
-    df["senkou_span_a"] = ((df["tenkan_sen"] + df["kijun_sen"]) / 2).shift(26)
-    df["senkou_span_b"] = ((high_52 + low_52) / 2).shift(26)
-
-    df["chikou_span"] = df["close"].shift(-26)
-
-    # ✅ RSI
-    df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
-
-    return df
+# =========================
+# FUNCTIONS
+# =========================
+def fetch_ohlcv(symbol, timeframe="1h", limit=150):
+    try:
+        data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df
+    except Exception as e:
+        print(f"Error fetching {symbol} {timeframe}: {e}")
+        return None
 
 def analyze_ichimoku(df):
+    # Ichimoku components
+    high9 = df["high"].rolling(window=9).max()
+    low9 = df["low"].rolling(window=9).min()
+    conversion_line = (high9 + low9) / 2
+
+    high26 = df["high"].rolling(window=26).max()
+    low26 = df["low"].rolling(window=26).min()
+    base_line = (high26 + low26) / 2
+
+    span_a = ((conversion_line + base_line) / 2).shift(26)
+    high52 = df["high"].rolling(window=52).max()
+    low52 = df["low"].rolling(window=52).min()
+    span_b = ((high52 + low52) / 2).shift(26)
+
+    lagging_span = df["close"].shift(-26)
+
     latest = df.iloc[-1]
+    price = latest["close"]
 
-    cloud_top = max(latest["senkou_span_a"], latest["senkou_span_b"])
-    cloud_bottom = min(latest["senkou_span_a"], latest["senkou_span_b"])
+    signal = "NEUTRAL"
+    stop_loss = None
+    take_profit = None
 
-    lagging = latest["chikou_span"]
-    close = latest["close"]
-    rsi = latest["rsi"]
-    signal = "Neutral"
-    lagging_info = ""
-
-    # ✅ Buy: Close above cloud + Tenkan > Kijun + Lagging above cloud
-    if close > cloud_top and latest["tenkan_sen"] > latest["kijun_sen"] and lagging > cloud_top:
+    # Buy condition
+    if conversion_line.iloc[-1] > base_line.iloc[-1] and price > span_a.iloc[-1] and price > span_b.iloc[-1]:
         signal = "BUY"
+        # SL below cloud
+        stop_loss = min(span_a.iloc[-1], span_b.iloc[-1])
+        risk = price - stop_loss
+        take_profit = price + 2 * risk
 
-    # ✅ Sell: Close below cloud + Tenkan < Kijun + Lagging below cloud
-    elif close < cloud_bottom and latest["tenkan_sen"] < latest["kijun_sen"] and lagging < cloud_bottom:
+    # Sell condition
+    elif conversion_line.iloc[-1] < base_line.iloc[-1] and price < span_a.iloc[-1] and price < span_b.iloc[-1]:
         signal = "SELL"
+        # SL above cloud
+        stop_loss = max(span_a.iloc[-1], span_b.iloc[-1])
+        risk = stop_loss - price
+        take_profit = price - 2 * risk
 
-    # Lagging Span info
-    if not np.isnan(lagging):
-        if lagging > cloud_top:
-            lagging_info = "(Lagging ABOVE cloud)"
-        elif lagging < cloud_bottom:
-            lagging_info = "(Lagging BELOW cloud)"
-        else:
-            lagging_info = "(Lagging INSIDE cloud)"
+    return signal, price, stop_loss, take_profit, conversion_line.iloc[-1], base_line.iloc[-1], lagging_span.iloc[-1]
 
-    return signal, close, lagging_info, rsi
+def check_signals():
+    for symbol in symbols:
+        for tf in timeframes:
+            df = fetch_ohlcv(symbol, tf)
+            if df is None:
+                continue
+            signal, price, sl, tp, tenkan, kijun, chikou = analyze_ichimoku(df)
 
-# ---------------- ALERT FUNCTION -------------------
-def check_and_alert(context: CallbackContext):
-    global last_signals
-    for symbol in SYMBOLS:
-        for tf in TIMEFRAMES:
-            try:
-                df = fetch_ohlcv(symbol, tf)
-                df = ichimoku(df)
-                signal, price, lagging_info, rsi = analyze_ichimoku(df)
-                prev_signal = last_signals[symbol][tf]
+            if signal in ["BUY", "SELL"]:
+                message = (
+                    f"🚨 *{signal} Signal Detected*\n"
+                    f"📊 {symbol} | TF: {tf}\n"
+                    f"💵 Price: {price:.2f}\n"
+                    f"🔵 Tenkan: {tenkan:.2f} | 🔴 Kijun: {kijun:.2f}\n"
+                    f"⏳ Lagging: {chikou:.2f}\n"
+                    f"❌ Stop Loss: {sl:.2f}\n"
+                    f"✅ Take Profit: {tp:.2f}\n"
+                    f"📈 R:R = 1:2"
+                )
+                bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
 
-                # Only notify when signal just formed
-                if signal != "Neutral" and signal != prev_signal:
-                    msg = (
-                        f"🚨 {symbol} ({tf})\n"
-                        f"Signal: {signal} {lagging_info}\n"
-                        f"RSI: {rsi:.1f}\n"
-                        f"Price: {price:.4f} USDT"
-                    )
-                    context.bot.send_message(chat_id=CHAT_ID, text=msg)
-                    last_signals[symbol][tf] = signal
+# =========================
+# SCHEDULER
+# =========================
+scheduler = BackgroundScheduler(timezone=pytz.utc)
+scheduler.add_job(check_signals, "interval", minutes=60)  # Every 1h
+scheduler.start()
 
-            except Exception as e:
-                logger.error(f"Error fetching {symbol} {tf}: {e}")
-
-# ---------------- TELEGRAM COMMANDS -------------------
-def start(update, context):
-    update.message.reply_text("Multi-coin Ichimoku bot online ✅")
-
-def status(update, context):
-    msg_list = []
-    for symbol in SYMBOLS:
-        for tf in TIMEFRAMES:
-            try:
-                df = fetch_ohlcv(symbol, tf)
-                df = ichimoku(df)
-                signal, price, lagging_info, rsi = analyze_ichimoku(df)
-                msg_list.append(f"{symbol} ({tf}): {signal} {lagging_info} | RSI {rsi:.1f} @ {price:.4f} USDT")
-            except:
-                msg_list.append(f"{symbol} ({tf}): Error fetching")
-    update.message.reply_text("\n".join(msg_list))
-
-def test(update, context):
-    update.message.reply_text("✅ Bot is working")
-
-# ---------------- MAIN -------------------
-def main():
-    updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("status", status))
-    dp.add_handler(CommandHandler("test", test))
-
-    # Scheduler runs every 1 hour and checks ALL timeframes
-    scheduler = BackgroundScheduler(timezone=pytz.UTC)
-    scheduler.add_job(check_and_alert, "interval", hours=CHECK_INTERVAL_HOURS, args=[updater.bot])
-    scheduler.start()
-
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == "__main__":
-    main()
+print("Bot started... waiting for signals 🚀")
