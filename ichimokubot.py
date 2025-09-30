@@ -1,13 +1,11 @@
 import os
 import json
-import asyncio
 import logging
-import aiohttp
+import requests
 import pandas as pd
 import numpy as np
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # ---------------- CONFIG ----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -42,21 +40,20 @@ def key_for(symbol, tf):
     return f"{symbol}_{tf}"
 
 # ---------------- DATA FETCH ----------------
-async def fetch_ohlcv(symbol, interval, limit=150):
+def fetch_ohlcv(symbol, interval, limit=150):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as r:
-                data = await r.json()
-                if isinstance(data, dict) and data.get("code"):
-                    return None
-                df = pd.DataFrame(data, columns=[
-                    "time","o","h","l","c","v","ct","qv","n","tb","tq","ig"
-                ])
-                df["c"] = df["c"].astype(float)
-                df["h"] = df["h"].astype(float)
-                df["l"] = df["l"].astype(float)
-                return df
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if isinstance(data, dict) and data.get("code"):
+            return None
+        df = pd.DataFrame(data, columns=[
+            "time","o","h","l","c","v","ct","qv","n","tb","tq","ig"
+        ])
+        df["c"] = df["c"].astype(float)
+        df["h"] = df["h"].astype(float)
+        df["l"] = df["l"].astype(float)
+        return df
     except Exception as e:
         logging.warning(f"Fetch fail {symbol} {interval}: {e}")
         return None
@@ -95,7 +92,7 @@ def analyze_df(df):
     span_b_v = senkou_span_b.iloc[-1]
     chikou_v = chikou.iloc[-1]
 
-    # ✅ Ichimoku checklist (bullish and bearish)
+    # ✅ Ichimoku checklist
     checklist_bull = [
         ("Price above cloud", price > max(span_a_v, span_b_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
@@ -140,7 +137,6 @@ def analyze_df(df):
 
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
-    """Return a cleaned checklist with only one side shown per condition"""
     lines = []
     for bull, bear in zip(analysis["checklist_bull"], analysis["checklist_bear"]):
         if bull[1]:
@@ -152,21 +148,21 @@ def format_checklist(analysis):
     return "\n".join(lines)
 
 # ---------------- COMMANDS ----------------
-async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is working!")
+def test(update: Update, context: CallbackContext):
+    update.message.reply_text("✅ Bot is working!")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def status(update: Update, context: CallbackContext):
     if not context.args:
-        await update.message.reply_text("Usage: /status BTC")
+        update.message.reply_text("Usage: /status BTC")
         return
     sym = context.args[0].upper() + "USDT"
     if sym not in SYMBOLS:
-        await update.message.reply_text("Unknown coin")
+        update.message.reply_text("Unknown coin")
         return
 
     messages = []
     for tf_label, interval in TIMEFRAMES.items():
-        df = await fetch_ohlcv(sym, interval)
+        df = fetch_ohlcv(sym, interval)
         if df is None:
             messages.append(f"❌ No data for {tf_label}")
             continue
@@ -184,14 +180,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += format_checklist(analysis)
         messages.append(msg)
 
-    await update.message.reply_text("\n\n".join(messages))
+    update.message.reply_text("\n\n".join(messages))
 
 # ---------------- ALERT JOB ----------------
-async def check_and_alert(app):
+def check_and_alert(context: CallbackContext):
     global last_signals
+    bot = context.bot
     for symbol in SYMBOLS:
         for tf_label, interval in TIMEFRAMES.items():
-            df = await fetch_ohlcv(symbol, interval)
+            df = fetch_ohlcv(symbol, interval)
             if df is None:
                 continue
             analysis = analyze_df(df)
@@ -209,29 +206,30 @@ async def check_and_alert(app):
                     msg += f"SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n\n"
                 msg += format_checklist(analysis)
 
-                await app.bot.send_message(chat_id=CHAT_ID, text=msg)
+                bot.send_message(chat_id=CHAT_ID, text=msg)
                 last_signals[k] = sent_label
                 save_last_signals(last_signals)
 
-            await asyncio.sleep(0.3)
-
 # ---------------- HEARTBEAT ----------------
-async def heartbeat(app):
-    await app.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
+def heartbeat(context: CallbackContext):
+    context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
 
 # ---------------- MAIN ----------------
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("test", test))
-    app.add_handler(CommandHandler("status", status))
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(lambda: asyncio.create_task(check_and_alert(app)), "interval", hours=1)
-    scheduler.add_job(lambda: asyncio.create_task(heartbeat(app)), "interval", hours=4)
-    scheduler.start()
+    dp.add_handler(CommandHandler("test", test))
+    dp.add_handler(CommandHandler("status", status))
+
+    # Jobs
+    jq = updater.job_queue
+    jq.run_repeating(check_and_alert, interval=3600, first=10)   # every 1h
+    jq.run_repeating(heartbeat, interval=14400, first=20)        # every 4h
 
     logging.info("Bot started")
-    app.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
