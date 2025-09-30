@@ -5,10 +5,10 @@ import os
 import numpy as np
 import pytz
 import ta
-from telegram import Update
-from telegram.constants import ParseMode
+from telegram import Update, ParseMode   # ✅ FIXED
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
+
 
 # ================== CONFIG ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
