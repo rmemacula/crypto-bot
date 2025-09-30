@@ -5,6 +5,8 @@ import os
 import numpy as np
 import pytz
 import ta
+from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import Updater, CommandHandler, CallbackContext
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -27,7 +29,7 @@ LIMIT = 200
 CHECK_INTERVAL_HOURS = 1
 # ============================================
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 exchange = ccxt.binance()
@@ -35,7 +37,6 @@ last_signals = {s: {tf: None for tf in TIMEFRAMES} for s in SYMBOLS}
 
 # ---------------- INDICATOR FUNCTIONS ----------------
 def fetch_ohlcv(symbol, timeframe, limit=LIMIT):
-    logger.info(f"Fetching OHLCV for {symbol} {timeframe}...")
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
@@ -68,24 +69,24 @@ def analyze_ichimoku(df):
     cloud_top = max(latest["senkou_span_a"], latest["senkou_span_b"])
     cloud_bottom = min(latest["senkou_span_a"], latest["senkou_span_b"])
 
-    lagging = latest["chikou_span"]
     close = latest["close"]
+    lagging = latest["chikou_span"]
     rsi = latest["rsi"]
+
     signal = "Neutral"
-    lagging_info = ""
     sl, tp = None, None
     checklist = []
 
-    # ✅ Buy conditions
+    # Conditions
     if close > cloud_top:
         checklist.append("✅ Price ABOVE cloud")
     else:
-        checklist.append("❌ Price ABOVE cloud")
+        checklist.append("❌ Price BELOW/INSIDE cloud")
 
     if latest["tenkan_sen"] > latest["kijun_sen"]:
         checklist.append("✅ Tenkan > Kijun")
     else:
-        checklist.append("❌ Tenkan > Kijun")
+        checklist.append("❌ Tenkan ≤ Kijun")
 
     if not np.isnan(lagging):
         if lagging > cloud_top:
@@ -93,14 +94,20 @@ def analyze_ichimoku(df):
         elif lagging < cloud_bottom:
             checklist.append("✅ Lagging BELOW cloud")
         else:
-            checklist.append("❌ Lagging inside cloud")
+            checklist.append("❌ Lagging INSIDE cloud")
 
-    # Final signal
-    if close > cloud_top and latest["tenkan_sen"] > latest["kijun_sen"] and lagging > cloud_top:
+    # ✅ Buy: Close above cloud + Tenkan > Kijun + Lagging above cloud
+    if (close > cloud_top and
+        latest["tenkan_sen"] > latest["kijun_sen"] and
+        lagging > cloud_top):
         signal = "BUY"
         sl = cloud_bottom
         tp = close + 2 * (close - sl)
-    elif close < cloud_bottom and latest["tenkan_sen"] < latest["kijun_sen"] and lagging < cloud_bottom:
+
+    # ✅ Sell: Close below cloud + Tenkan < Kijun + Lagging below cloud
+    elif (close < cloud_bottom and
+          latest["tenkan_sen"] < latest["kijun_sen"] and
+          lagging < cloud_bottom):
         signal = "SELL"
         sl = cloud_top
         tp = close - 2 * (sl - close)
@@ -108,9 +115,8 @@ def analyze_ichimoku(df):
     return signal, close, rsi, sl, tp, checklist
 
 # ---------------- ALERT FUNCTION -------------------
-def check_and_alert(bot):
+def check_and_alert(context: CallbackContext):
     global last_signals
-    logger.info("Running scheduled market scan...")
     for symbol in SYMBOLS:
         for tf in TIMEFRAMES:
             try:
@@ -120,29 +126,27 @@ def check_and_alert(bot):
                 prev_signal = last_signals[symbol][tf]
 
                 if signal != "Neutral" and signal != prev_signal:
-                    logger.info(f"🚨 New {signal} signal detected for {symbol} {tf}")
-                    msg = (
-                        f"🚨 {symbol} ({tf})\n"
-                        f"Signal: {signal}\n"
-                        f"RSI: {rsi:.1f}\n"
-                        f"Entry: {price:.4f} USDT\n"
-                        f"{chr(10).join(checklist)}"
-                    )
+                    msg = f"🚨 *{symbol}* ({tf})\n"
+                    if signal == "BUY":
+                        msg += "🟢 *BUY*\n"
+                    elif signal == "SELL":
+                        msg += "🔴 *SELL*\n"
+                    msg += f"Price: *{price:.2f}* USDT\nRSI: *{rsi:.1f}*\n"
                     if sl and tp:
-                        msg += f"\nSL: {sl:.4f} USDT\nTP: {tp:.4f} USDT"
-                    bot.send_message(chat_id=CHAT_ID, text=msg)
+                        msg += f"SL: *{sl:.2f}* | TP: *{tp:.2f}*\n"
+                    msg += "*Ichimoku Checklist:*\n" + "\n".join(checklist)
+
+                    context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
                     last_signals[symbol][tf] = signal
-                else:
-                    logger.info(f"{symbol} {tf} → No new signal ({signal})")
 
             except Exception as e:
-                logger.error(f"Error scanning {symbol} {tf}: {e}")
+                logger.error(f"Error fetching {symbol} {tf}: {e}")
 
 # ---------------- TELEGRAM COMMANDS -------------------
-def start(update, context):
+def start(update: Update, context: CallbackContext):
     update.message.reply_text("Multi-coin Ichimoku bot online ✅")
 
-def status(update, context):
+def status(update: Update, context: CallbackContext):
     args = context.args
     target_symbols = SYMBOLS
 
@@ -163,26 +167,39 @@ def status(update, context):
                 df = fetch_ohlcv(symbol, tf)
                 df = ichimoku(df)
                 signal, price, rsi, sl, tp, checklist = analyze_ichimoku(df)
-                line = f"{symbol} ({tf}): {signal} | RSI {rsi:.1f} | Price {price:.2f}"
-                line += f"\n{chr(10).join(checklist)}"
-                if signal in ["BUY", "SELL"]:
-                    line += f"\nSL {sl:.2f} | TP {tp:.2f}"
-                msg_list.append(line)
-            except:
-                msg_list.append(f"{symbol} ({tf}): Error fetching")
-    update.message.reply_text("\n\n".join(msg_list))
 
-def test(update, context):
+                if signal == "BUY":
+                    signal_text = "🟢 *BUY*"
+                elif signal == "SELL":
+                    signal_text = "🔴 *SELL*"
+                else:
+                    signal_text = "⚪ Neutral"
+
+                msg = f"📊 *{symbol}* ({tf})\n"
+                msg += f"Signal: {signal_text}\n"
+                msg += f"Price: *{price:.2f}* USDT\n"
+                msg += f"RSI: *{rsi:.1f}*\n"
+
+                if signal in ["BUY", "SELL"]:
+                    msg += f"SL: *{sl:.2f}* | TP: *{tp:.2f}*\n"
+
+                msg += "*Ichimoku Checklist:*\n" + "\n".join(checklist)
+                msg_list.append(msg)
+
+            except Exception as e:
+                msg_list.append(f"{symbol} ({tf}): Error → {e}")
+
+    update.message.reply_text("\n\n".join(msg_list), parse_mode=ParseMode.MARKDOWN)
+
+def test(update: Update, context: CallbackContext):
     update.message.reply_text("✅ Bot is online and working!")
 
 # ---------------- HEARTBEAT -------------------
-def heartbeat(bot):
-    logger.info("Sending heartbeat message...")
-    bot.send_message(chat_id=CHAT_ID, text="🤖 Heartbeat: bot is alive and scanning markets.")
+def heartbeat(context: CallbackContext):
+    context.bot.send_message(chat_id=CHAT_ID, text="🤖 Ichimoku bot heartbeat: still running, waiting for signals...")
 
 # ---------------- MAIN -------------------
 def main():
-    logger.info("Starting Ichimoku bot...")
     updater = Updater(token=TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
@@ -195,7 +212,6 @@ def main():
     scheduler.add_job(heartbeat, "interval", hours=4, args=[updater.bot])
     scheduler.start()
 
-    logger.info("Bot started. Polling Telegram...")
     updater.start_polling()
     updater.idle()
 
