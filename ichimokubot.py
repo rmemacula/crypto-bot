@@ -149,13 +149,24 @@ def analyze_df(df):
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
     lines = []
-    for bull, bear in zip(analysis["checklist_bull"], analysis["checklist_bear"]):
-        if bull[1]:
-            lines.append("✅ " + bull[0])
-        elif bear[1]:
-            lines.append("✅ " + bear[0])
+    signal = analysis["signal"]
+
+    for (bull_label, bull_val), (bear_label, bear_val) in zip(
+        analysis["checklist_bull"], analysis["checklist_bear"]
+    ):
+        if signal == "BUY":
+            lines.append(f"{'✅' if bull_val else '❌'} {bull_label}")
+        elif signal == "SELL":
+            lines.append(f"{'✅' if bear_val else '❌'} {bear_label}")
         else:
-            lines.append("❌ " + bull[0] + " / " + bear[0])
+            # Neutral case — show both sides
+            if bull_val:
+                lines.append("✅ " + bull_label)
+            elif bear_val:
+                lines.append("✅ " + bear_label)
+            else:
+                lines.append("❌ " + bull_label + " / " + bear_label)
+
     return "\n".join(lines)
 
 # ---------------- COMMANDS ----------------
