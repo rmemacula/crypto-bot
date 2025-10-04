@@ -74,8 +74,6 @@ def analyze_df(df):
     senkou_span_b = ((high52 + low52) / 2).shift(26)
 
     close = df["c"]
-    chikou = close.shift(-26)
-
     price = close.iloc[-1]
 
     # RSI
@@ -90,20 +88,32 @@ def analyze_df(df):
     kijun_v = kijun.iloc[-1]
     span_a_v = senkou_span_a.iloc[-1]
     span_b_v = senkou_span_b.iloc[-1]
-    chikou_v = chikou.iloc[-1]
 
-    # ✅ Ichimoku checklist
+    # ---------------- CORRECT LAGGING SPAN CHECK ----------------
+    chikou_above = False
+    chikou_below = False
+    if len(df) > 26:
+        idx = -27  # 26 bars ago
+        past_close = close.iloc[idx]
+        span_a_past = senkou_span_a.iloc[idx]
+        span_b_past = senkou_span_b.iloc[idx]
+
+        if not np.isnan(span_a_past) and not np.isnan(span_b_past):
+            chikou_above = past_close > max(span_a_past, span_b_past)
+            chikou_below = past_close < min(span_a_past, span_b_past)
+
+    # ✅ Ichimoku checklist (aligned)
     checklist_bull = [
         ("Price above cloud", price > max(span_a_v, span_b_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
-        ("Lagging span above cloud", chikou_v > max(span_a_v, span_b_v)),
+        ("Lagging span above cloud", chikou_above),
         ("Future cloud bullish", span_a_v > span_b_v),
     ]
 
     checklist_bear = [
         ("Price below cloud", price < min(span_a_v, span_b_v)),
         ("Tenkan < Kijun", tenkan_v < kijun_v),
-        ("Lagging span below cloud", chikou_v < min(span_a_v, span_b_v)),
+        ("Lagging span below cloud", chikou_below),
         ("Future cloud bearish", span_a_v < span_b_v),
     ]
 
@@ -134,6 +144,7 @@ def analyze_df(df):
         "sl": sl,
         "tp": tp,
     }
+
 
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
