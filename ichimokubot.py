@@ -48,7 +48,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
         if isinstance(data, dict) and data.get("code"):
             return None
         df = pd.DataFrame(data, columns=[
-            "time","o","h","l","c","v","ct","qv","n","tb","tq","ig"
+            "time", "o", "h", "l", "c", "v", "ct", "qv", "n", "tb", "tq", "ig"
         ])
         df["c"] = df["c"].astype(float)
         df["h"] = df["h"].astype(float)
@@ -85,10 +85,10 @@ def analyze_df(df):
     rsi_val = rsi.iloc[-1]
 
     tenkan_v = tenkan.iloc[-2]
-kijun_v = kijun.iloc[-2]
-span_a_v = senkou_span_a.iloc[-2]
-span_b_v = senkou_span_b.iloc[-2]
-price = df["c"].iloc[-2]
+    kijun_v = kijun.iloc[-2]
+    span_a_v = senkou_span_a.iloc[-2]
+    span_b_v = senkou_span_b.iloc[-2]
+    price = df["c"].iloc[-2]
 
     # ---------------- CORRECT LAGGING SPAN CHECK ----------------
     chikou_above = False
@@ -145,7 +145,6 @@ price = df["c"].iloc[-2]
         "sl": sl,
         "tp": tp,
     }
-
 
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
@@ -234,10 +233,9 @@ def main():
     dp.add_handler(CommandHandler("test", test))
     dp.add_handler(CommandHandler("status", status))
 
-    # Jobs
     jq = updater.job_queue
-    jq.run_repeating(check_and_alert, interval=300, first=10)   # every 5mins
-    jq.run_repeating(heartbeat, interval=14400, first=20)        # every 4h
+    jq.run_repeating(check_and_alert, interval=300, first=10)    # every 5 mins
+    jq.run_repeating(heartbeat, interval=14400, first=20)        # every 4 hours
 
     logging.info("Bot started")
     updater.start_polling()
