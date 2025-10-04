@@ -84,10 +84,11 @@ def analyze_df(df):
     rsi = 100 - (100 / (1 + rs))
     rsi_val = rsi.iloc[-1]
 
-    tenkan_v = tenkan.iloc[-1]
-    kijun_v = kijun.iloc[-1]
-    span_a_v = senkou_span_a.iloc[-1]
-    span_b_v = senkou_span_b.iloc[-1]
+    tenkan_v = tenkan.iloc[-2]
+kijun_v = kijun.iloc[-2]
+span_a_v = senkou_span_a.iloc[-2]
+span_b_v = senkou_span_b.iloc[-2]
+price = df["c"].iloc[-2]
 
     # ---------------- CORRECT LAGGING SPAN CHECK ----------------
     chikou_above = False
