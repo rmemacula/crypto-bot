@@ -235,7 +235,7 @@ def main():
 
     # Jobs
     jq = updater.job_queue
-    jq.run_repeating(check_and_alert, interval=3600, first=10)   # every 1h
+    jq.run_repeating(check_and_alert, interval=300, first=10)   # every 5mins
     jq.run_repeating(heartbeat, interval=14400, first=20)        # every 4h
 
     logging.info("Bot started")
