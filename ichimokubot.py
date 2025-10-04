@@ -60,6 +60,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
+    # Ichimoku components
     high9 = df["h"].rolling(window=9).max()
     low9 = df["l"].rolling(window=9).min()
     tenkan = (high9 + low9) / 2
@@ -76,7 +77,7 @@ def analyze_df(df):
     close = df["c"]
     price = close.iloc[-1]
 
-    # RSI
+    # RSI calculation
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
@@ -90,20 +91,19 @@ def analyze_df(df):
     span_b_v = senkou_span_b.iloc[-2]
     price = df["c"].iloc[-2]
 
-    # ---------------- CORRECT LAGGING SPAN CHECK ----------------
+    # Lagging span check (Chikou)
     chikou_above = False
     chikou_below = False
     if len(df) > 26:
-        idx = -27  # 26 bars ago
+        idx = -27  # 26 periods back
         past_close = close.iloc[idx]
         span_a_past = senkou_span_a.iloc[idx]
         span_b_past = senkou_span_b.iloc[idx]
-
         if not np.isnan(span_a_past) and not np.isnan(span_b_past):
             chikou_above = past_close > max(span_a_past, span_b_past)
             chikou_below = past_close < min(span_a_past, span_b_past)
 
-    # ✅ Ichimoku checklist (aligned)
+    # ✅ Correct Ichimoku checklist
     checklist_bull = [
         ("Price above cloud", price > max(span_a_v, span_b_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
