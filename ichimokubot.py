@@ -18,7 +18,6 @@ SYMBOLS = [
 ]
 
 TIMEFRAMES = {"1h": "1h", "4h": "4h", "1d": "1d"}
-
 DATA_FILE = "last_signals.json"
 
 logging.basicConfig(level=logging.INFO)
@@ -60,7 +59,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
-    # Ichimoku components
+    # ---- Ichimoku Calculations ----
     high9 = df["h"].rolling(window=9).max()
     low9 = df["l"].rolling(window=9).min()
     tenkan = (high9 + low9) / 2
@@ -75,35 +74,37 @@ def analyze_df(df):
     senkou_span_b = ((high52 + low52) / 2).shift(26)
 
     close = df["c"]
-    price = close.iloc[-1]
+    price = close.iloc[-2]  # last closed candle
 
-    # RSI calculation
+    # ---- RSI Calculation ----
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
-    rsi_val = rsi.iloc[-1]
+    rsi_val = rsi.iloc[-2]
 
+    # ---- Use last closed candle values ----
     tenkan_v = tenkan.iloc[-2]
     kijun_v = kijun.iloc[-2]
-    span_a_v = senkou_span_a.iloc[-2]
-    span_b_v = senkou_span_b.iloc[-2]
-    price = df["c"].iloc[-2]
 
-    # Lagging span check (Chikou)
-    chikou_above = False
-    chikou_below = False
+    # ---- Future Cloud (projected 26 candles ahead) ----
+    # Use latest available senkou_span_a/b values (i.e., last non-NaN)
+    span_a_v = senkou_span_a.dropna().iloc[-1]
+    span_b_v = senkou_span_b.dropna().iloc[-1]
+
+    # ---- Lagging span (Chikou) ----
+    chikou_span = close.shift(-26)
+    chikou_above = chikou_below = False
     if len(df) > 26:
-        idx = -27  # 26 periods back
+        idx = -28  # Compare 26 candles back from last closed
         past_close = close.iloc[idx]
-        span_a_past = senkou_span_a.iloc[idx]
-        span_b_past = senkou_span_b.iloc[idx]
-        if not np.isnan(span_a_past) and not np.isnan(span_b_past):
-            chikou_above = past_close > max(span_a_past, span_b_past)
-            chikou_below = past_close < min(span_a_past, span_b_past)
+        past_span_a = senkou_span_a.iloc[idx] if not np.isnan(senkou_span_a.iloc[idx]) else 0
+        past_span_b = senkou_span_b.iloc[idx] if not np.isnan(senkou_span_b.iloc[idx]) else 0
+        chikou_above = past_close > max(past_span_a, past_span_b)
+        chikou_below = past_close < min(past_span_a, past_span_b)
 
-    # ✅ Correct Ichimoku checklist
+    # ✅ Ichimoku Checklist
     checklist_bull = [
         ("Price above cloud", price > max(span_a_v, span_b_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
@@ -159,14 +160,13 @@ def format_checklist(analysis):
         elif signal == "SELL":
             lines.append(f"{'✅' if bear_val else '❌'} {bear_label}")
         else:
-            # Neutral case — show both sides
+            # Neutral case
             if bull_val:
                 lines.append("✅ " + bull_label)
             elif bear_val:
                 lines.append("✅ " + bear_label)
             else:
                 lines.append("❌ " + bull_label + " / " + bear_label)
-
     return "\n".join(lines)
 
 # ---------------- COMMANDS ----------------
@@ -245,8 +245,8 @@ def main():
     dp.add_handler(CommandHandler("status", status))
 
     jq = updater.job_queue
-    jq.run_repeating(check_and_alert, interval=300, first=10)    # every 5 mins
-    jq.run_repeating(heartbeat, interval=14400, first=20)        # every 4 hours
+    jq.run_repeating(check_and_alert, interval=300, first=10)
+    jq.run_repeating(heartbeat, interval=14400, first=20)
 
     logging.info("Bot started")
     updater.start_polling()
