@@ -66,6 +66,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
     except Exception as e:
         logging.warning(f"Fetch exception {symbol} {interval}: {e}")
         return None
+
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
     if df is None or len(df) < 100:
@@ -112,15 +113,15 @@ def analyze_df(df):
     span_b_future_v = float(senkou_span_b_future.iloc[-2])
 
     # ---- Lagging span (Chikou) ----
-    chikou_span = close.shift(-26)
     chikou_above = chikou_below = False
     if len(df) > 52:
-        idx = -28
-        past_close = close.iloc[idx]
-        past_span_a = span_a.iloc[idx]
-        past_span_b = span_b.iloc[idx]
-        chikou_above = past_close > max(past_span_a, past_span_b)
-        chikou_below = past_close < min(past_span_a, past_span_b)
+        # Lagging span candle index
+        lag_idx = -27  # 26 back from last closed candle (last closed is -2)
+        lag_close = close.iloc[lag_idx]
+        lag_span_a = span_a.iloc[lag_idx]
+        lag_span_b = span_b.iloc[lag_idx]
+        chikou_above = lag_close > max(lag_span_a, lag_span_b)
+        chikou_below = lag_close < min(lag_span_a, lag_span_b)
 
     # ---- Ichimoku Checklist (price compared to future cloud) ----
     checklist_bull = [
@@ -167,6 +168,7 @@ def analyze_df(df):
         "sl": sl,
         "tp": tp,
     }
+
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
     lines = []
@@ -229,6 +231,7 @@ def status(update: Update, context: CallbackContext):
         messages.append(msg)
 
     update.message.reply_text("\n\n".join(messages), parse_mode="Markdown")
+
 # ---------------- ALERT JOB ----------------
 def check_and_alert(context: CallbackContext):
     global last_signals
@@ -247,7 +250,6 @@ def check_and_alert(context: CallbackContext):
             sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}"
 
             if sig in ("BUY", "SELL") and prev != sent_label:
-                # Build TradingView link safely
                 tv_link = tradingview_link(symbol, tf_label)
                 safe_symbol = symbol.replace("_", "\\_").replace("-", "\\-")
 
@@ -263,12 +265,11 @@ def check_and_alert(context: CallbackContext):
 
                 msg += format_checklist(analysis)
 
-                # Send formatted message
                 bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
-                # Update last signal
                 last_signals[k] = sent_label
                 save_last_signals(last_signals)
+
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context: CallbackContext):
     context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
