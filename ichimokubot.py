@@ -74,6 +74,7 @@ def analyze_df(df):
     low26 = df["l"].rolling(window=26).min()
     kijun = (high26 + low26) / 2
 
+    # Projected 26 candles ahead (future cloud)
     senkou_span_a = ((tenkan + kijun) / 2).shift(26)
     high52 = df["h"].rolling(window=52).max()
     low52 = df["l"].rolling(window=52).min()
@@ -94,34 +95,42 @@ def analyze_df(df):
     tenkan_v = tenkan.iloc[-2]
     kijun_v = kijun.iloc[-2]
 
-    # ---- Future Cloud (projected 26 candles ahead) ----
-    span_a_v = senkou_span_a.dropna().iloc[-1]
-    span_b_v = senkou_span_b.dropna().iloc[-1]
+    # ✅ Correct alignment: "current" cloud = future cloud shifted back 26 candles
+    span_a_current = senkou_span_a.shift(-26)
+    span_b_current = senkou_span_b.shift(-26)
+
+    # Values of the current cloud (under current price)
+    span_a_curr_v = span_a_current.iloc[-2]
+    span_b_curr_v = span_b_current.iloc[-2]
+
+    # ---- Future Cloud (for trend projection) ----
+    span_a_future_v = senkou_span_a.dropna().iloc[-1]
+    span_b_future_v = senkou_span_b.dropna().iloc[-1]
 
     # ---- Lagging span (Chikou) ----
     chikou_span = close.shift(-26)
     chikou_above = chikou_below = False
     if len(df) > 26:
-        idx = -28
+        idx = -28  # compare lagging span to historical cloud
         past_close = close.iloc[idx]
         past_span_a = senkou_span_a.iloc[idx] if not np.isnan(senkou_span_a.iloc[idx]) else 0
         past_span_b = senkou_span_b.iloc[idx] if not np.isnan(senkou_span_b.iloc[idx]) else 0
         chikou_above = past_close > max(past_span_a, past_span_b)
         chikou_below = past_close < min(past_span_a, past_span_b)
 
-    # ✅ Ichimoku Checklist
+    # ✅ Ichimoku Checklist (now using correct current cloud)
     checklist_bull = [
-        ("Price above cloud", price > max(span_a_v, span_b_v)),
+        ("Price above cloud", price > max(span_a_curr_v, span_b_curr_v)),  # current cloud
         ("Tenkan > Kijun", tenkan_v > kijun_v),
         ("Lagging span above cloud", chikou_above),
-        ("Future cloud bullish", span_a_v > span_b_v),
+        ("Future cloud bullish", span_a_future_v > span_b_future_v),
     ]
 
     checklist_bear = [
-        ("Price below cloud", price < min(span_a_v, span_b_v)),
+        ("Price below cloud", price < min(span_a_curr_v, span_b_curr_v)),  # current cloud
         ("Tenkan < Kijun", tenkan_v < kijun_v),
         ("Lagging span below cloud", chikou_below),
-        ("Future cloud bearish", span_a_v < span_b_v),
+        ("Future cloud bearish", span_a_future_v < span_b_future_v),
     ]
 
     bullish_count = sum(c for _, c in checklist_bull)
@@ -131,12 +140,12 @@ def analyze_df(df):
     sl = tp = None
     if bullish_count >= 3:
         signal = "BUY"
-        sl = min(span_a_v, span_b_v) * 0.995
+        sl = min(span_a_curr_v, span_b_curr_v) * 0.995
         risk = price - sl
         tp = price + 2 * risk
     elif bearish_count >= 3:
         signal = "SELL"
-        sl = max(span_a_v, span_b_v) * 1.005
+        sl = max(span_a_curr_v, span_b_curr_v) * 1.005
         risk = sl - price
         tp = price - 2 * risk
 
@@ -151,7 +160,6 @@ def analyze_df(df):
         "sl": sl,
         "tp": tp,
     }
-
 # ---------------- CHECKLIST FORMATTER ----------------
 def format_checklist(analysis):
     lines = []
