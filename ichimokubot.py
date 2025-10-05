@@ -69,30 +69,20 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
-    if df is None or len(df) < 100:
+    if df is None or len(df) < 52:  # minimum candles to calculate Ichimoku safely
         return {"signal": "Neutral", "price": None, "rsi": None}
 
+    close = df["c"]
+
     # ---- Ichimoku Calculations ----
-    high9 = df["h"].rolling(window=9).max()
-    low9 = df["l"].rolling(window=9).min()
-    tenkan = (high9 + low9) / 2
-
-    high26 = df["h"].rolling(window=26).max()
-    low26 = df["l"].rolling(window=26).min()
-    kijun = (high26 + low26) / 2
-
-    # Current cloud (not shifted)
+    tenkan = (df["h"].rolling(9).max() + df["l"].rolling(9).min()) / 2
+    kijun = (df["h"].rolling(26).max() + df["l"].rolling(26).min()) / 2
     span_a = (tenkan + kijun) / 2
-    high52 = df["h"].rolling(window=52).max()
-    low52 = df["l"].rolling(window=52).min()
-    span_b = (high52 + low52) / 2
+    span_b = (df["h"].rolling(52).max() + df["l"].rolling(52).min()) / 2
 
-    # Future cloud (projected 26 periods ahead)
+    # Future cloud projected 26 periods ahead
     senkou_span_a_future = span_a.shift(26)
     senkou_span_b_future = span_b.shift(26)
-
-    close = df["c"]
-    price = close.iloc[-2]  # last closed candle
 
     # ---- RSI Calculation ----
     delta = close.diff()
@@ -102,28 +92,28 @@ def analyze_df(df):
     rsi = 100 - (100 / (1 + rs))
     rsi_val = float(rsi.iloc[-2]) if not np.isnan(rsi.iloc[-2]) else None
 
-    # ---- Extract last valid values ----
+    # ---- Last closed candle values ----
+    price = close.iloc[-2]
     tenkan_v = float(tenkan.iloc[-2])
     kijun_v = float(kijun.iloc[-2])
     span_a_curr_v = float(span_a.iloc[-2])
     span_b_curr_v = float(span_b.iloc[-2])
-
-    # ---- Future cloud values aligned to last closed candle ----
     span_a_future_v = float(senkou_span_a_future.iloc[-2])
     span_b_future_v = float(senkou_span_b_future.iloc[-2])
 
     # ---- Lagging span (Chikou) ----
     chikou_above = chikou_below = False
     if len(df) > 52:
-        # Lagging span candle index
-        lag_idx = -27  # 26 back from last closed candle (last closed is -2)
-        lag_close = close.iloc[lag_idx]
-        lag_span_a = span_a.iloc[lag_idx]
-        lag_span_b = span_b.iloc[lag_idx]
-        chikou_above = lag_close > max(lag_span_a, lag_span_b)
-        chikou_below = lag_close < min(lag_span_a, lag_span_b)
+        # Use shift to safely align lagging span
+        lag_close = close.shift(26).iloc[-2]  # 26 candles back from last closed
+        lag_span_a = span_a.shift(-26).iloc[-2]
+        lag_span_b = span_b.shift(-26).iloc[-2]
 
-    # ---- Ichimoku Checklist (price compared to future cloud) ----
+        if not np.isnan(lag_close) and not np.isnan(lag_span_a) and not np.isnan(lag_span_b):
+            chikou_above = lag_close > max(lag_span_a, lag_span_b)
+            chikou_below = lag_close < min(lag_span_a, lag_span_b)
+
+    # ---- Ichimoku Checklist ----
     checklist_bull = [
         ("Price above cloud", price > max(span_a_future_v, span_b_future_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
@@ -141,18 +131,17 @@ def analyze_df(df):
     bullish_count = sum(c for _, c in checklist_bull)
     bearish_count = sum(c for _, c in checklist_bear)
 
+    # ---- Generate signal, SL, TP ----
     signal = "Neutral"
     sl = tp = None
     if bullish_count >= 3:
         signal = "BUY"
-        sl = min(span_a_curr_v, span_b_curr_v) * 0.995  # current candle cloud
-        risk = price - sl
-        tp = price + 2 * risk
+        sl = min(span_a_curr_v, span_b_curr_v) * 0.995
+        tp = price + 2 * (price - sl)
     elif bearish_count >= 3:
         signal = "SELL"
-        sl = max(span_a_curr_v, span_b_curr_v) * 1.005  # current candle cloud
-        risk = sl - price
-        tp = price - 2 * risk
+        sl = max(span_a_curr_v, span_b_curr_v) * 1.005
+        tp = price - 2 * (sl - price)
 
     if np.isnan(sl) or np.isnan(tp):
         sl = tp = None
