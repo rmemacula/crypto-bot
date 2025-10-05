@@ -119,23 +119,23 @@ def analyze_df(df):
 
     # ---- Chikou Span (Lagging Span) Analysis ----
     # Chikou Span = Current close plotted 26 periods back
-    # We compare current price to the cloud that existed 26 periods ago
+    # We compare current price to the cloud at the chikou position (26 periods ago)
     chikou_above = chikou_below = False
     
-    # Look back 26 periods from current position
+    # The chikou position is 26 periods back from current
     chikou_idx = last_idx - 26
     
-    # For Chikou, we need to go back another 26 from the chikou position
-    # to get the cloud at that historical point
+    # The cloud at the chikou position was projected 26 periods before that
+    # So we look back another 26 periods in the Senkou calculations
     chikou_cloud_idx = chikou_idx - 26
     
     # Make sure we have enough data
     if abs(chikou_cloud_idx) <= len(df) - 52:
-        # Cloud values at the chikou position
+        # Cloud values at the chikou position (what the cloud was 26 periods ago)
         cloud_a_at_chikou = float(senkou_a.iloc[chikou_cloud_idx])
         cloud_b_at_chikou = float(senkou_b.iloc[chikou_cloud_idx])
         
-        # Current price (chikou span value) compared to past cloud
+        # Current price (chikou span value) compared to the cloud at that historical position
         if not np.isnan(cloud_a_at_chikou) and not np.isnan(cloud_b_at_chikou):
             chikou_above = price > max(cloud_a_at_chikou, cloud_b_at_chikou)
             chikou_below = price < min(cloud_a_at_chikou, cloud_b_at_chikou)
