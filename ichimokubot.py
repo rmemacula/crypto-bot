@@ -65,6 +65,9 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
+    if df is None or len(df) < 100:
+        return {"signal": "Neutral", "price": None, "rsi": None}
+
     # ---- Ichimoku Calculations ----
     high9 = df["h"].rolling(window=9).max()
     low9 = df["l"].rolling(window=9).min()
@@ -74,11 +77,15 @@ def analyze_df(df):
     low26 = df["l"].rolling(window=26).min()
     kijun = (high26 + low26) / 2
 
-    # Projected 26 candles ahead (future cloud)
-    senkou_span_a = ((tenkan + kijun) / 2).shift(26)
+    # ✅ Current cloud (no shift)
+    span_a = (tenkan + kijun) / 2
     high52 = df["h"].rolling(window=52).max()
     low52 = df["l"].rolling(window=52).min()
-    senkou_span_b = ((high52 + low52) / 2).shift(26)
+    span_b = (high52 + low52) / 2
+
+    # ✅ Future (projected) cloud for outlook
+    senkou_span_a_future = span_a.shift(26)
+    senkou_span_b_future = span_b.shift(26)
 
     close = df["c"]
     price = close.iloc[-2]  # last closed candle
@@ -89,45 +96,40 @@ def analyze_df(df):
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
-    rsi_val = rsi.iloc[-2]
+    rsi_val = float(rsi.iloc[-2]) if not np.isnan(rsi.iloc[-2]) else None
 
-    # ---- Use last closed candle values ----
-    tenkan_v = tenkan.iloc[-2]
-    kijun_v = kijun.iloc[-2]
+    # ---- Extract last valid values ----
+    tenkan_v = float(tenkan.iloc[-2])
+    kijun_v = float(kijun.iloc[-2])
+    span_a_curr_v = float(span_a.iloc[-2])
+    span_b_curr_v = float(span_b.iloc[-2])
 
-    # ✅ Correct alignment: "current" cloud = future cloud shifted back 26 candles
-    span_a_current = senkou_span_a.shift(-26)
-    span_b_current = senkou_span_b.shift(-26)
-
-    # Values of the current cloud (under current price)
-    span_a_curr_v = span_a_current.iloc[-2]
-    span_b_curr_v = span_b_current.iloc[-2]
-
-    # ---- Future Cloud (for trend projection) ----
-    span_a_future_v = senkou_span_a.dropna().iloc[-1]
-    span_b_future_v = senkou_span_b.dropna().iloc[-1]
+    # For projection / future trend
+    span_a_future_v = float(senkou_span_a_future.dropna().iloc[-1])
+    span_b_future_v = float(senkou_span_b_future.dropna().iloc[-1])
 
     # ---- Lagging span (Chikou) ----
     chikou_span = close.shift(-26)
     chikou_above = chikou_below = False
-    if len(df) > 26:
-        idx = -28  # compare lagging span to historical cloud
+    if len(df) > 52:
+        # Compare lagging span to cloud 26 periods ago
+        idx = -28
         past_close = close.iloc[idx]
-        past_span_a = senkou_span_a.iloc[idx] if not np.isnan(senkou_span_a.iloc[idx]) else 0
-        past_span_b = senkou_span_b.iloc[idx] if not np.isnan(senkou_span_b.iloc[idx]) else 0
+        past_span_a = span_a.iloc[idx]
+        past_span_b = span_b.iloc[idx]
         chikou_above = past_close > max(past_span_a, past_span_b)
         chikou_below = past_close < min(past_span_a, past_span_b)
 
-    # ✅ Ichimoku Checklist (now using correct current cloud)
+    # ✅ Ichimoku Checklist (current vs. projected)
     checklist_bull = [
-        ("Price above cloud", price > max(span_a_curr_v, span_b_curr_v)),  # current cloud
+        ("Price above cloud", price > max(span_a_curr_v, span_b_curr_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
         ("Lagging span above cloud", chikou_above),
         ("Future cloud bullish", span_a_future_v > span_b_future_v),
     ]
 
     checklist_bear = [
-        ("Price below cloud", price < min(span_a_curr_v, span_b_curr_v)),  # current cloud
+        ("Price below cloud", price < min(span_a_curr_v, span_b_curr_v)),
         ("Tenkan < Kijun", tenkan_v < kijun_v),
         ("Lagging span below cloud", chikou_below),
         ("Future cloud bearish", span_a_future_v < span_b_future_v),
@@ -140,14 +142,18 @@ def analyze_df(df):
     sl = tp = None
     if bullish_count >= 3:
         signal = "BUY"
-        sl = min(span_a_curr_v, span_b_curr_v) * 0.995
+        sl = min(span_a_curr_v, span_b_curr_v) * 0.995  # just below cloud
         risk = price - sl
         tp = price + 2 * risk
     elif bearish_count >= 3:
         signal = "SELL"
-        sl = max(span_a_curr_v, span_b_curr_v) * 1.005
+        sl = max(span_a_curr_v, span_b_curr_v) * 1.005  # just above cloud
         risk = sl - price
         tp = price - 2 * risk
+
+    # Prevent NaN SL/TP
+    if np.isnan(sl) or np.isnan(tp):
+        sl = tp = None
 
     return {
         "price": price,
