@@ -69,7 +69,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
-    if df is None or len(df) < 78:  # Need 52 + 26 for proper Chikou analysis
+    if df is None or len(df) < 104:  # Need 52 + 26 + 26 for proper analysis
         return {"signal": "Neutral", "price": None, "rsi": None}
 
     close = df["c"]
@@ -103,9 +103,19 @@ def analyze_df(df):
     tenkan_v = float(tenkan.iloc[last_idx])
     kijun_v = float(kijun.iloc[last_idx])
     
-    # Current cloud position (for price comparison and stop loss)
-    cloud_a_current = float(senkou_a.iloc[last_idx])
-    cloud_b_current = float(senkou_b.iloc[last_idx])
+    # ---- Current Cloud Position (where price is NOW) ----
+    # The cloud at the current candle was projected 26 periods ago
+    # So we need to look back 26 periods in the Senkou calculations
+    cloud_idx = last_idx - 26
+    
+    # Make sure we have enough historical data
+    if abs(cloud_idx) <= len(df) - 52:
+        cloud_a_current = float(senkou_a.iloc[cloud_idx])
+        cloud_b_current = float(senkou_b.iloc[cloud_idx])
+    else:
+        # Fallback if not enough data
+        cloud_a_current = float(senkou_a.iloc[last_idx])
+        cloud_b_current = float(senkou_b.iloc[last_idx])
 
     # ---- Chikou Span (Lagging Span) Analysis ----
     # Chikou Span = Current close plotted 26 periods back
@@ -115,11 +125,15 @@ def analyze_df(df):
     # Look back 26 periods from current position
     chikou_idx = last_idx - 26
     
-    # Make sure we have enough data (need index to be >= -78 for 52-period calculation)
-    if abs(chikou_idx) <= len(df) - 52:
-        # Cloud values at the chikou position (26 periods ago)
-        cloud_a_at_chikou = float(senkou_a.iloc[chikou_idx])
-        cloud_b_at_chikou = float(senkou_b.iloc[chikou_idx])
+    # For Chikou, we need to go back another 26 from the chikou position
+    # to get the cloud at that historical point
+    chikou_cloud_idx = chikou_idx - 26
+    
+    # Make sure we have enough data
+    if abs(chikou_cloud_idx) <= len(df) - 52:
+        # Cloud values at the chikou position
+        cloud_a_at_chikou = float(senkou_a.iloc[chikou_cloud_idx])
+        cloud_b_at_chikou = float(senkou_b.iloc[chikou_cloud_idx])
         
         # Current price (chikou span value) compared to past cloud
         if not np.isnan(cloud_a_at_chikou) and not np.isnan(cloud_b_at_chikou):
@@ -127,12 +141,9 @@ def analyze_df(df):
             chikou_below = price < min(cloud_a_at_chikou, cloud_b_at_chikou)
 
     # ---- Future Cloud Analysis (26 periods ahead projection) ----
-    # In standard Ichimoku, Senkou Spans are plotted 26 periods into the future
-    # We look at where the current calculation projects the cloud to be
+    # The Senkou values calculated NOW represent where the cloud WILL BE 26 periods ahead
     future_cloud_bullish = future_cloud_bearish = False
     
-    # The current Senkou values represent where the cloud will be 26 periods ahead
-    # So we check the cloud color at the current calculation
     cloud_a_future = float(senkou_a.iloc[last_idx])
     cloud_b_future = float(senkou_b.iloc[last_idx])
     
@@ -239,8 +250,8 @@ def status(update: Update, context: CallbackContext):
         if df is None:
             messages.append(f"❌ No data for {tf_label} (check symbol or API)")
             continue
-        if len(df) < 78:
-            messages.append(f"❌ Not enough data for {tf_label} (need 78+ candles, have {len(df)})")
+        if len(df) < 104:
+            messages.append(f"❌ Not enough data for {tf_label} (need 104+ candles, have {len(df)})")
             continue
 
         analysis = analyze_df(df)
