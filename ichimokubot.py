@@ -104,10 +104,13 @@ def analyze_df(df):
     # ---- Lagging span (Chikou) ----
     chikou_above = chikou_below = False
     if len(df) > 52:
-        # Use shift to safely align lagging span
-        lag_close = close.shift(26).iloc[-2]  # 26 candles back from last closed
-        lag_span_a = span_a.shift(-26).iloc[-2]
-        lag_span_b = span_b.shift(-26).iloc[-2]
+        # Lagging span is 26 periods back from last closed candle (-2)
+        lag_idx = -28
+        lag_close = close.iloc[lag_idx]
+
+        # Compare lagging span to the cloud at the same historical candle
+        lag_span_a = span_a.iloc[lag_idx]
+        lag_span_b = span_b.iloc[lag_idx]
 
         if not np.isnan(lag_close) and not np.isnan(lag_span_a) and not np.isnan(lag_span_b):
             chikou_above = lag_close > max(lag_span_a, lag_span_b)
