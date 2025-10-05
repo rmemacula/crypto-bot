@@ -104,20 +104,15 @@ def analyze_df(df):
     span_a_future_v = float(senkou_span_a_future.iloc[last_idx])
     span_b_future_v = float(senkou_span_b_future.iloc[last_idx])
 
-    # ---- Lagging span (Chikou) ----
-    lag_idx = last_idx - 26
+    # ---- Lagging span (26 periods back) ----
     chikou_above = chikou_below = False
-    if lag_idx >= 51:  # need at least 52 candles for Span B
+    lag_idx = last_idx - 26
+    if lag_idx >= 51:  # Need at least 52 candles for Span B
         lag_close = close.iloc[lag_idx]
 
-        # Cloud at lagging period
-        lag_tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
-        lag_kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
-        lag_span_a = (lag_tenkan + lag_kijun) / 2
-        lag_span_b = (high.rolling(52).max() + low.rolling(52).min()) / 2
-
-        lag_span_a_val = lag_span_a.iloc[lag_idx]
-        lag_span_b_val = lag_span_b.iloc[lag_idx]
+        # Cloud values at the lagging period
+        lag_span_a_val = (tenkan + kijun).iloc[lag_idx] / 2
+        lag_span_b_val = span_b.iloc[lag_idx]
 
         if not np.isnan(lag_close) and not np.isnan(lag_span_a_val) and not np.isnan(lag_span_b_val):
             chikou_above = lag_close > max(lag_span_a_val, lag_span_b_val)
