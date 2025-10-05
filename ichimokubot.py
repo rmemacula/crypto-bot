@@ -69,22 +69,25 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
-    if df is None or len(df) < 52:
+    if df is None or len(df) < 78:  # Need 52 + 26 for proper Chikou analysis
         return {"signal": "Neutral", "price": None, "rsi": None}
 
     close = df["c"]
     high = df["h"]
     low = df["l"]
 
-    # ---- Ichimoku ----
+    # ---- Ichimoku Components ----
+    # Tenkan-sen (Conversion Line): 9-period
     tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
+    
+    # Kijun-sen (Base Line): 26-period
     kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
-    span_a = (tenkan + kijun) / 2
-    span_b = (high.rolling(52).max() + low.rolling(52).min()) / 2
-
-    # Future cloud shifted 26 periods ahead
-    senkou_span_a_future = span_a.shift(26)
-    senkou_span_b_future = span_b.shift(26)
+    
+    # Senkou Span A (Leading Span A): Average of Tenkan and Kijun
+    senkou_a = (tenkan + kijun) / 2
+    
+    # Senkou Span B (Leading Span B): 52-period
+    senkou_b = (high.rolling(52).max() + low.rolling(52).min()) / 2
 
     # ---- RSI ----
     delta = close.diff()
@@ -94,63 +97,88 @@ def analyze_df(df):
     rsi = 100 - (100 / (1 + rs))
     rsi_val = float(rsi.iloc[-2]) if not np.isnan(rsi.iloc[-2]) else None
 
-    # ---- Last closed candle ----
+    # ---- Last closed candle analysis ----
     last_idx = -2
     price = close.iloc[last_idx]
     tenkan_v = float(tenkan.iloc[last_idx])
     kijun_v = float(kijun.iloc[last_idx])
-    span_a_curr_v = float(span_a.iloc[last_idx])
-    span_b_curr_v = float(span_b.iloc[last_idx])
-    span_a_future_v = float(senkou_span_a_future.iloc[last_idx])
-    span_b_future_v = float(senkou_span_b_future.iloc[last_idx])
+    
+    # Current cloud position (for price comparison and stop loss)
+    cloud_a_current = float(senkou_a.iloc[last_idx])
+    cloud_b_current = float(senkou_b.iloc[last_idx])
 
-    # ---- Lagging span (Chikou) ----
+    # ---- Chikou Span (Lagging Span) Analysis ----
+    # Chikou Span = Current close plotted 26 periods back
+    # We compare current price to the cloud that existed 26 periods ago
     chikou_above = chikou_below = False
-    lag_idx = last_idx - 26
-    if lag_idx >= 51:  # need at least 52 candles for Span B
-        lag_close = close.iloc[lag_idx]
+    
+    # Look back 26 periods from current position
+    chikou_idx = last_idx - 26
+    
+    # Make sure we have enough data (need index to be >= -78 for 52-period calculation)
+    if abs(chikou_idx) <= len(df) - 52:
+        # Cloud values at the chikou position (26 periods ago)
+        cloud_a_at_chikou = float(senkou_a.iloc[chikou_idx])
+        cloud_b_at_chikou = float(senkou_b.iloc[chikou_idx])
+        
+        # Current price (chikou span value) compared to past cloud
+        if not np.isnan(cloud_a_at_chikou) and not np.isnan(cloud_b_at_chikou):
+            chikou_above = price > max(cloud_a_at_chikou, cloud_b_at_chikou)
+            chikou_below = price < min(cloud_a_at_chikou, cloud_b_at_chikou)
 
-        # Calculate cloud values at lag_idx correctly
-        lag_tenkan = (high.iloc[lag_idx-8:lag_idx+1].max() + low.iloc[lag_idx-8:lag_idx+1].min()) / 2
-        lag_kijun = (high.iloc[lag_idx-25:lag_idx+1].max() + low.iloc[lag_idx-25:lag_idx+1].min()) / 2
-        lag_span_a = (lag_tenkan + lag_kijun) / 2
-        lag_span_b = (high.iloc[lag_idx-51:lag_idx+1].max() + low.iloc[lag_idx-51:lag_idx+1].min()) / 2
-
-        if not np.isnan(lag_close) and not np.isnan(lag_span_a) and not np.isnan(lag_span_b):
-            chikou_above = lag_close > max(lag_span_a, lag_span_b)
-            chikou_below = lag_close < min(lag_span_a, lag_span_b)
+    # ---- Future Cloud Analysis (26 periods ahead projection) ----
+    # In standard Ichimoku, Senkou Spans are plotted 26 periods into the future
+    # We look at where the current calculation projects the cloud to be
+    future_cloud_bullish = future_cloud_bearish = False
+    
+    # The current Senkou values represent where the cloud will be 26 periods ahead
+    # So we check the cloud color at the current calculation
+    cloud_a_future = float(senkou_a.iloc[last_idx])
+    cloud_b_future = float(senkou_b.iloc[last_idx])
+    
+    if not np.isnan(cloud_a_future) and not np.isnan(cloud_b_future):
+        # Future cloud is bullish when Senkou A > Senkou B (green/bullish cloud ahead)
+        # Future cloud is bearish when Senkou A < Senkou B (red/bearish cloud ahead)
+        future_cloud_bullish = cloud_a_future > cloud_b_future
+        future_cloud_bearish = cloud_a_future < cloud_b_future
 
     # ---- Ichimoku Checklist ----
     checklist_bull = [
-        ("Price above cloud", price > max(span_a_future_v, span_b_future_v)),
+        ("Price above cloud", price > max(cloud_a_current, cloud_b_current)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
-        ("Lagging span above cloud", chikou_above),
-        ("Future cloud bullish", span_a_future_v > span_b_future_v),
+        ("Chikou above cloud", chikou_above),
+        ("Future cloud bullish", future_cloud_bullish),
     ]
 
     checklist_bear = [
-        ("Price below cloud", price < min(span_a_future_v, span_b_future_v)),
+        ("Price below cloud", price < min(cloud_a_current, cloud_b_current)),
         ("Tenkan < Kijun", tenkan_v < kijun_v),
-        ("Lagging span below cloud", chikou_below),
-        ("Future cloud bearish", span_a_future_v < span_b_future_v),
+        ("Chikou below cloud", chikou_below),
+        ("Future cloud bearish", future_cloud_bearish),
     ]
 
     bullish_count = sum(c for _, c in checklist_bull)
     bearish_count = sum(c for _, c in checklist_bear)
 
-    # ---- Signal, SL, TP ----
+    # ---- Signal Generation and Risk Management ----
     signal = "Neutral"
     sl = tp = None
+    
     if bullish_count >= 3:
         signal = "BUY"
-        sl = min(span_a_curr_v, span_b_curr_v) * 0.995
+        # Stop loss below the current cloud
+        sl = min(cloud_a_current, cloud_b_current) * 0.995
+        # Take profit at 2:1 reward-risk ratio
         tp = price + 2 * (price - sl)
     elif bearish_count >= 3:
         signal = "SELL"
-        sl = max(span_a_curr_v, span_b_curr_v) * 1.005
+        # Stop loss above the current cloud
+        sl = max(cloud_a_current, cloud_b_current) * 1.005
+        # Take profit at 2:1 reward-risk ratio
         tp = price - 2 * (sl - price)
 
-    if np.isnan(sl) or np.isnan(tp):
+    # Validate SL and TP
+    if sl is None or tp is None or np.isnan(sl) or np.isnan(tp):
         sl = tp = None
 
     return {
@@ -163,6 +191,12 @@ def analyze_df(df):
         "checklist_bear": checklist_bear,
         "sl": sl,
         "tp": tp,
+        "tenkan": tenkan_v,
+        "kijun": kijun_v,
+        "cloud_a": cloud_a_current,
+        "cloud_b": cloud_b_current,
+        "cloud_a_future": cloud_a_future,
+        "cloud_b_future": cloud_b_future,
     }
 
 # ---------------- CHECKLIST FORMATTER ----------------
@@ -205,8 +239,8 @@ def status(update: Update, context: CallbackContext):
         if df is None:
             messages.append(f"❌ No data for {tf_label} (check symbol or API)")
             continue
-        if len(df) < 100:
-            messages.append(f"❌ Not enough data for {tf_label} (have {len(df)} candles)")
+        if len(df) < 78:
+            messages.append(f"❌ Not enough data for {tf_label} (need 78+ candles, have {len(df)})")
             continue
 
         analysis = analyze_df(df)
@@ -221,7 +255,7 @@ def status(update: Update, context: CallbackContext):
         if analysis["sl"] and analysis["tp"]:
             msg += f"SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
 
-        msg += format_checklist(analysis)
+        msg += "\n" + format_checklist(analysis)
         messages.append(msg)
 
     update.message.reply_text("\n\n".join(messages), parse_mode="Markdown")
