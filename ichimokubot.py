@@ -38,6 +38,12 @@ last_signals = load_last_signals()
 def key_for(symbol, tf):
     return f"{symbol}_{tf}"
 
+# ---------------- TRADINGVIEW LINK ----------------
+def tradingview_link(symbol, tf_label):
+    tf_map = {"1h": "60", "4h": "240", "1d": "1D"}
+    interval = tf_map.get(tf_label, "60")
+    return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}&interval={interval}"
+
 # ---------------- DATA FETCH ----------------
 def fetch_ohlcv(symbol, interval, limit=150):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -89,7 +95,6 @@ def analyze_df(df):
     kijun_v = kijun.iloc[-2]
 
     # ---- Future Cloud (projected 26 candles ahead) ----
-    # Use latest available senkou_span_a/b values (i.e., last non-NaN)
     span_a_v = senkou_span_a.dropna().iloc[-1]
     span_b_v = senkou_span_b.dropna().iloc[-1]
 
@@ -97,7 +102,7 @@ def analyze_df(df):
     chikou_span = close.shift(-26)
     chikou_above = chikou_below = False
     if len(df) > 26:
-        idx = -28  # Compare 26 candles back from last closed
+        idx = -28
         past_close = close.iloc[idx]
         past_span_a = senkou_span_a.iloc[idx] if not np.isnan(senkou_span_a.iloc[idx]) else 0
         past_span_b = senkou_span_b.iloc[idx] if not np.isnan(senkou_span_b.iloc[idx]) else 0
@@ -160,7 +165,6 @@ def format_checklist(analysis):
         elif signal == "SELL":
             lines.append(f"{'✅' if bear_val else '❌'} {bear_label}")
         else:
-            # Neutral case
             if bull_val:
                 lines.append("✅ " + bull_label)
             elif bear_val:
@@ -195,6 +199,7 @@ def status(update: Update, context: CallbackContext):
             f"Signal: {analysis['signal']}\n"
             f"Price: {analysis['price']:.2f} USDT\n"
             f"RSI: {analysis['rsi']:.2f}\n"
+            f"📈 [View on TradingView]({tradingview_link(sym, tf_label)})\n"
         )
         if analysis["sl"] and analysis["tp"]:
             msg += f"SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
@@ -202,7 +207,7 @@ def status(update: Update, context: CallbackContext):
         msg += format_checklist(analysis)
         messages.append(msg)
 
-    update.message.reply_text("\n\n".join(messages))
+    update.message.reply_text("\n\n".join(messages), parse_mode="Markdown")
 
 # ---------------- ALERT JOB ----------------
 def check_and_alert(context: CallbackContext):
@@ -213,25 +218,37 @@ def check_and_alert(context: CallbackContext):
             df = fetch_ohlcv(symbol, interval)
             if df is None:
                 continue
+
             analysis = analyze_df(df)
             sig = analysis["signal"]
             k = key_for(symbol, tf_label)
             prev = last_signals.get(k)
 
             sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}"
+
             if sig in ("BUY", "SELL") and prev != sent_label:
+                # Build TradingView link safely
+                tv_link = tradingview_link(symbol, tf_label)
+                safe_symbol = symbol.replace("_", "\\_").replace("-", "\\-")
+
                 msg = (
-                    f"🚨 {symbol} ({tf_label}) — {sig}\n\n"
-                    f"Price: {analysis['price']:.2f} USDT | RSI: {analysis['rsi']:.2f}\n"
+                    f"🚨 *{safe_symbol}* ({tf_label}) — *{sig}*\n\n"
+                    f"💰 *Price:* {analysis['price']:.2f} USDT\n"
+                    f"📊 *RSI:* {analysis['rsi']:.2f}\n"
+                    f"🔗 [View on TradingView]({tv_link})\n\n"
                 )
+
                 if analysis["sl"] and analysis["tp"]:
-                    msg += f"SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n\n"
+                    msg += f"🎯 *SL:* {analysis['sl']:.2f} | *TP:* {analysis['tp']:.2f}\n\n"
+
                 msg += format_checklist(analysis)
 
-                bot.send_message(chat_id=CHAT_ID, text=msg)
+                # Send formatted message
+                bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+
+                # Update last signal
                 last_signals[k] = sent_label
                 save_last_signals(last_signals)
-
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context: CallbackContext):
     context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
@@ -239,6 +256,7 @@ def heartbeat(context: CallbackContext):
 # ---------------- MAIN ----------------
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    updater.bot.defaults.parse_mode = "Markdown"  # ✅ Makes links clickable
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("test", test))
