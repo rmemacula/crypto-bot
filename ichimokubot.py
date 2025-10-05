@@ -256,7 +256,6 @@ def heartbeat(context: CallbackContext):
 # ---------------- MAIN ----------------
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
-    updater.bot.defaults.parse_mode = "Markdown"  # ✅ Makes links clickable
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("test", test))
