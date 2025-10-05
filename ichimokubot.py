@@ -69,7 +69,7 @@ def fetch_ohlcv(symbol, interval, limit=150):
 
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
-    if df is None or len(df) < 52:  # minimum candles to calculate Ichimoku safely
+    if df is None or len(df) < 52:
         return {"signal": "Neutral", "price": None, "rsi": None}
 
     close = df["c"]
@@ -103,12 +103,10 @@ def analyze_df(df):
 
     # ---- Lagging span (Chikou) ----
     chikou_above = chikou_below = False
-    if len(df) > 52:
-        # Lagging span is 26 periods back from last closed candle (-2)
-        lag_idx = -28
+    last_idx = -2
+    lag_idx = last_idx - 26
+    if lag_idx >= 0:
         lag_close = close.iloc[lag_idx]
-
-        # Compare lagging span to the cloud at the same historical candle
         lag_span_a = span_a.iloc[lag_idx]
         lag_span_b = span_b.iloc[lag_idx]
 
