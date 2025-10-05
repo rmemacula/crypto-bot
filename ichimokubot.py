@@ -49,8 +49,12 @@ def fetch_ohlcv(symbol, interval, limit=150):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            logging.warning(f"Fetch fail {symbol} {interval}: HTTP {r.status_code}")
+            return None
         data = r.json()
         if isinstance(data, dict) and data.get("code"):
+            logging.warning(f"Binance API error for {symbol} {interval}: {data}")
             return None
         df = pd.DataFrame(data, columns=[
             "time", "o", "h", "l", "c", "v", "ct", "qv", "n", "tb", "tq", "ig"
@@ -60,9 +64,8 @@ def fetch_ohlcv(symbol, interval, limit=150):
         df["l"] = df["l"].astype(float)
         return df
     except Exception as e:
-        logging.warning(f"Fetch fail {symbol} {interval}: {e}")
+        logging.warning(f"Fetch exception {symbol} {interval}: {e}")
         return None
-
 # ---------------- ANALYSIS ----------------
 def analyze_df(df):
     if df is None or len(df) < 100:
@@ -194,6 +197,7 @@ def status(update: Update, context: CallbackContext):
         update.message.reply_text("Usage: /status BTC")
         return
     sym = context.args[0].upper() + "USDT"
+
     if sym not in SYMBOLS:
         update.message.reply_text("Unknown coin")
         return
@@ -202,8 +206,13 @@ def status(update: Update, context: CallbackContext):
     for tf_label, interval in TIMEFRAMES.items():
         df = fetch_ohlcv(sym, interval)
         if df is None:
-            messages.append(f"❌ No data for {tf_label}")
+            messages.append(f"❌ No data for {tf_label} (check symbol or API)")
             continue
+
+        if len(df) < 100:
+            messages.append(f"❌ Not enough data for {tf_label} (have {len(df)} candles)")
+            continue
+
         analysis = analyze_df(df)
 
         msg = (
@@ -220,7 +229,6 @@ def status(update: Update, context: CallbackContext):
         messages.append(msg)
 
     update.message.reply_text("\n\n".join(messages), parse_mode="Markdown")
-
 # ---------------- ALERT JOB ----------------
 def check_and_alert(context: CallbackContext):
     global last_signals
