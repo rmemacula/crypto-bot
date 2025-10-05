@@ -104,9 +104,9 @@ def analyze_df(df):
     span_a_curr_v = float(span_a.iloc[-2])
     span_b_curr_v = float(span_b.iloc[-2])
 
-    # Latest future cloud values
-    span_a_future_v = float(senkou_span_a_future.dropna().iloc[-1])
-    span_b_future_v = float(senkou_span_b_future.dropna().iloc[-1])
+    # ---- Future cloud values aligned to last closed candle ----
+    span_a_future_v = float(senkou_span_a_future.iloc[-2])
+    span_b_future_v = float(senkou_span_b_future.iloc[-2])
 
     # ---- Lagging span (Chikou) ----
     chikou_span = close.shift(-26)
@@ -119,7 +119,7 @@ def analyze_df(df):
         chikou_above = past_close > max(past_span_a, past_span_b)
         chikou_below = past_close < min(past_span_a, past_span_b)
 
-    # ---- Ichimoku Checklist (signal based on future cloud) ----
+    # ---- Ichimoku Checklist (price compared to future cloud) ----
     checklist_bull = [
         ("Price above cloud", price > max(span_a_future_v, span_b_future_v)),
         ("Tenkan > Kijun", tenkan_v > kijun_v),
@@ -141,12 +141,12 @@ def analyze_df(df):
     sl = tp = None
     if bullish_count >= 3:
         signal = "BUY"
-        sl = min(span_a_curr_v, span_b_curr_v) * 0.995  # ✅ current candle cloud
+        sl = min(span_a_curr_v, span_b_curr_v) * 0.995  # current candle cloud
         risk = price - sl
         tp = price + 2 * risk
     elif bearish_count >= 3:
         signal = "SELL"
-        sl = max(span_a_curr_v, span_b_curr_v) * 1.005  # ✅ current candle cloud
+        sl = max(span_a_curr_v, span_b_curr_v) * 1.005  # current candle cloud
         risk = sl - price
         tp = price - 2 * risk
 
