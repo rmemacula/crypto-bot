@@ -73,18 +73,20 @@ def analyze_df(df):
         return {"signal": "Neutral", "price": None, "rsi": None}
 
     close = df["c"]
+    high = df["h"]
+    low = df["l"]
 
-    # ---- Ichimoku Calculations ----
-    tenkan = (df["h"].rolling(9).max() + df["l"].rolling(9).min()) / 2
-    kijun = (df["h"].rolling(26).max() + df["l"].rolling(26).min()) / 2
+    # ---- Ichimoku ----
+    tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
+    kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
     span_a = (tenkan + kijun) / 2
-    span_b = (df["h"].rolling(52).max() + df["l"].rolling(52).min()) / 2
+    span_b = (high.rolling(52).max() + low.rolling(52).min()) / 2
 
-    # Future cloud projected 26 periods ahead
+    # Future cloud shifted 26 periods ahead
     senkou_span_a_future = span_a.shift(26)
     senkou_span_b_future = span_b.shift(26)
 
-    # ---- RSI Calculation ----
+    # ---- RSI ----
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
@@ -92,23 +94,25 @@ def analyze_df(df):
     rsi = 100 - (100 / (1 + rs))
     rsi_val = float(rsi.iloc[-2]) if not np.isnan(rsi.iloc[-2]) else None
 
-    # ---- Last closed candle values ----
-    price = close.iloc[-2]
-    tenkan_v = float(tenkan.iloc[-2])
-    kijun_v = float(kijun.iloc[-2])
-    span_a_curr_v = float(span_a.iloc[-2])
-    span_b_curr_v = float(span_b.iloc[-2])
-    span_a_future_v = float(senkou_span_a_future.iloc[-2])
-    span_b_future_v = float(senkou_span_b_future.iloc[-2])
-
-    # ---- Lagging span (Chikou) ----
-    chikou_above = chikou_below = False
+    # ---- Last closed candle ----
     last_idx = -2
+    price = close.iloc[last_idx]
+    tenkan_v = float(tenkan.iloc[last_idx])
+    kijun_v = float(kijun.iloc[last_idx])
+    span_a_curr_v = float(span_a.iloc[last_idx])
+    span_b_curr_v = float(span_b.iloc[last_idx])
+    span_a_future_v = float(senkou_span_a_future.iloc[last_idx])
+    span_b_future_v = float(senkou_span_b_future.iloc[last_idx])
+
+    # ---- Lagging span (26 periods back) ----
+    chikou_above = chikou_below = False
     lag_idx = last_idx - 26
     if lag_idx >= 0:
         lag_close = close.iloc[lag_idx]
-        lag_span_a = span_a.iloc[lag_idx]
-        lag_span_b = span_b.iloc[lag_idx]
+
+        # Cloud at lagging period
+        lag_span_a = (high.iloc[lag_idx-8:lag_idx+1].max() + low.iloc[lag_idx-8:lag_idx+1].min()) / 2
+        lag_span_b = (high.iloc[lag_idx-51:lag_idx+1].max() + low.iloc[lag_idx-51:lag_idx+1].min()) / 2
 
         if not np.isnan(lag_close) and not np.isnan(lag_span_a) and not np.isnan(lag_span_b):
             chikou_above = lag_close > max(lag_span_a, lag_span_b)
@@ -132,7 +136,7 @@ def analyze_df(df):
     bullish_count = sum(c for _, c in checklist_bull)
     bearish_count = sum(c for _, c in checklist_bear)
 
-    # ---- Generate signal, SL, TP ----
+    # ---- Signal, SL, TP ----
     signal = "Neutral"
     sl = tp = None
     if bullish_count >= 3:
@@ -163,7 +167,6 @@ def analyze_df(df):
 def format_checklist(analysis):
     lines = []
     signal = analysis["signal"]
-
     for (bull_label, bull_val), (bear_label, bear_val) in zip(
         analysis["checklist_bull"], analysis["checklist_bear"]
     ):
@@ -200,7 +203,6 @@ def status(update: Update, context: CallbackContext):
         if df is None:
             messages.append(f"❌ No data for {tf_label} (check symbol or API)")
             continue
-
         if len(df) < 100:
             messages.append(f"❌ Not enough data for {tf_label} (have {len(df)} candles)")
             continue
@@ -231,32 +233,24 @@ def check_and_alert(context: CallbackContext):
             df = fetch_ohlcv(symbol, interval)
             if df is None:
                 continue
-
             analysis = analyze_df(df)
             sig = analysis["signal"]
             k = key_for(symbol, tf_label)
             prev = last_signals.get(k)
-
             sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}"
-
             if sig in ("BUY", "SELL") and prev != sent_label:
                 tv_link = tradingview_link(symbol, tf_label)
                 safe_symbol = symbol.replace("_", "\\_").replace("-", "\\-")
-
                 msg = (
                     f"🚨 *{safe_symbol}* ({tf_label}) — *{sig}*\n\n"
                     f"💰 *Price:* {analysis['price']:.2f} USDT\n"
                     f"📊 *RSI:* {analysis['rsi']:.2f}\n"
                     f"🔗 [View on TradingView]({tv_link})\n\n"
                 )
-
                 if analysis["sl"] and analysis["tp"]:
                     msg += f"🎯 *SL:* {analysis['sl']:.2f} | *TP:* {analysis['tp']:.2f}\n\n"
-
                 msg += format_checklist(analysis)
-
                 bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-
                 last_signals[k] = sent_label
                 save_last_signals(last_signals)
 
@@ -268,14 +262,11 @@ def heartbeat(context: CallbackContext):
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
-
     dp.add_handler(CommandHandler("test", test))
     dp.add_handler(CommandHandler("status", status))
-
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=300, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
-
     logging.info("Bot started")
     updater.start_polling()
     updater.idle()
