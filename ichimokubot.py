@@ -311,6 +311,59 @@ def check_and_alert(context: CallbackContext):
                 last_signals[k] = sent_label
                 save_last_signals(last_signals)
 
+#---------------status1d--------------------
+def status1d(update: Update, context: CallbackContext):
+    tf_label = "1d"
+    interval = TIMEFRAMES[tf_label]
+
+    update.message.reply_text("⏳ Checking 1D Ichimoku + RSI signals for all coins...")
+
+    messages = []
+    for sym in SYMBOLS:
+        df = fetch_ohlcv(sym, interval)
+        if df is None or len(df) < 104:
+            continue
+
+        analysis = analyze_df(df)
+        signal = analysis["signal"]
+
+        # Skip neutral signals to keep output clean
+        if signal == "Neutral":
+            continue
+
+        msg = (
+            f"📊 *{sym}* (1D)\n"
+            f"🟩 *{signal}*\n"
+            f"💰 Price: {analysis['price']:.2f} USDT\n"
+            f"📊 RSI: {analysis['rsi']:.2f}\n"
+            f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
+        )
+
+        if analysis["sl"] and analysis["tp"]:
+            msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
+
+        messages.append(msg)
+
+        # Send in batches of 15 coins to avoid Telegram 4096-char limit
+        if len(messages) % 15 == 0:
+            update.message.reply_text(
+                "\n\n".join(messages),
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+            messages = []
+
+    # Send any remaining results
+    if messages:
+        update.message.reply_text(
+            "\n\n".join(messages),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+
+    update.message.reply_text("✅ 1D status scan complete.")
+
+
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context: CallbackContext):
     context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
@@ -321,6 +374,7 @@ def main():
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("test", test))
     dp.add_handler(CommandHandler("status", status))
+    dp.add_handler(CommandHandler("status1d", status1d))
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=300, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
