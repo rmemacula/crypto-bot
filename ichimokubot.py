@@ -316,9 +316,10 @@ def status1d(update: Update, context: CallbackContext):
     tf_label = "1d"
     interval = TIMEFRAMES[tf_label]
 
-    update.message.reply_text("⏳ Checking 1D Ichimoku + RSI signals for all coins...")
+    update.message.reply_text("⏳ Scanning 1D Ichimoku + RSI signals (4/4 confirmed only)...")
 
-    messages = []
+    buy_msgs, sell_msgs = [], []
+
     for sym in SYMBOLS:
         df = fetch_ohlcv(sym, interval)
         if df is None or len(df) < 104:
@@ -327,41 +328,50 @@ def status1d(update: Update, context: CallbackContext):
         analysis = analyze_df(df)
         signal = analysis["signal"]
 
-        # Skip neutral signals to keep output clean
-        if signal == "Neutral":
-            continue
-
-        msg = (
-            f"📊 *{sym}* (1D)\n"
-            f"🟩 *{signal}*\n"
-            f"💰 Price: {analysis['price']:.2f} USDT\n"
-            f"📊 RSI: {analysis['rsi']:.2f}\n"
-            f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
-        )
-
-        if analysis["sl"] and analysis["tp"]:
-            msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
-
-        messages.append(msg)
-
-        # Send in batches of 15 coins to avoid Telegram 4096-char limit
-        if len(messages) % 15 == 0:
-            update.message.reply_text(
-                "\n\n".join(messages),
-                parse_mode="Markdown",
-                disable_web_page_preview=True
+        # Only include if all 4 checklist items are met for that side
+        if signal == "BUY" and analysis["bull_count"] == 4:
+            msg = (
+                f"🟩 *{sym}* — STRONG BUY (4/4)\n"
+                f"💰 Price: {analysis['price']:.2f} USDT\n"
+                f"📊 RSI: {analysis['rsi']:.2f}\n"
+                f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
             )
-            messages = []
+            if analysis["sl"] and analysis["tp"]:
+                msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
+            msg += "\n" + format_checklist(analysis)
+            buy_msgs.append(msg)
 
-    # Send any remaining results
-    if messages:
+        elif signal == "SELL" and analysis["bear_count"] == 4:
+            msg = (
+                f"🟥 *{sym}* — STRONG SELL (4/4)\n"
+                f"💰 Price: {analysis['price']:.2f} USDT\n"
+                f"📊 RSI: {analysis['rsi']:.2f}\n"
+                f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
+            )
+            if analysis["sl"] and analysis["tp"]:
+                msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
+            msg += "\n" + format_checklist(analysis)
+            sell_msgs.append(msg)
+
+    # Send grouped results
+    if buy_msgs:
         update.message.reply_text(
-            "\n\n".join(messages),
+            "🟩 *STRONG BUY signals (4/4 confirmed)*\n\n" + "\n\n".join(buy_msgs),
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
 
-    update.message.reply_text("✅ 1D status scan complete.")
+    if sell_msgs:
+        update.message.reply_text(
+            "🟥 *STRONG SELL signals (4/4 confirmed)*\n\n" + "\n\n".join(sell_msgs),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+
+    if not buy_msgs and not sell_msgs:
+        update.message.reply_text("⚪ No coins met all 4 Ichimoku checklist conditions (1D).")
+
+    update.message.reply_text("✅ 1D scan complete.")
 
 
 # ---------------- HEARTBEAT ----------------
