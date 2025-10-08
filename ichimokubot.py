@@ -329,45 +329,53 @@ def status1d(update: Update, context: CallbackContext):
     update.message.reply_text("⏳ Scanning 1D Ichimoku + RSI signals (4/4 confirmed only)...")
 
     buy_msgs, sell_msgs = [], []
-    manila_tz = timezone(timedelta(hours=8))  # UTC+8 timezone
+    manila_tz = timezone(timedelta(hours=8))  # Manila timezone
 
     for sym in SYMBOLS:
         df = fetch_ohlcv(sym, interval)
         if df is None or len(df) < 104:
             continue
 
+        # Analyze latest data
         analysis = analyze_df(df)
         signal = analysis["signal"]
 
-        # Get timestamp of last closed candle (convert milliseconds to datetime)
-        last_candle_time = int(df.iloc[-2]["time"])  # Binance gives ms timestamp
-        ts = datetime.fromtimestamp(last_candle_time / 1000, tz=manila_tz).strftime("%Y-%m-%d %H:%M %p (Manila)")
+        # Skip coins that aren’t full 4/4 signals
+        if not ((signal == "BUY" and analysis["bull_count"] == 4) or (signal == "SELL" and analysis["bear_count"] == 4)):
+            continue
 
-        # Only include if all 4 checklist items are met for that side
-        if signal == "BUY" and analysis["bull_count"] == 4:
-            msg = (
-                f"🟩 *{sym}* — STRONG BUY (4/4)\n"
-                f"🕒 Time: {ts}\n"
-                f"💰 Price: {analysis['price']:.2f} USDT\n"
-                f"📊 RSI: {analysis['rsi']:.2f}\n"
-                f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
-            )
-            if analysis["sl"] and analysis["tp"]:
-                msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
-            msg += "\n" + format_checklist(analysis)
+        # 🔍 Find when the 4/4 condition *first appeared* in recent candles
+        trigger_time = None
+        for i in range(len(df) - 104, len(df) - 1):  # check last ~100 candles for efficiency
+            sub_df = df.iloc[:i+1]
+            sub_analysis = analyze_df(sub_df)
+            if signal == "BUY" and sub_analysis["bull_count"] == 4:
+                trigger_time = int(sub_df.iloc[-2]["time"])
+            elif signal == "SELL" and sub_analysis["bear_count"] == 4:
+                trigger_time = int(sub_df.iloc[-2]["time"])
+        
+        # If found, format time; otherwise, fallback to latest candle
+        if trigger_time:
+            ts = datetime.fromtimestamp(trigger_time / 1000, tz=manila_tz).strftime("%Y-%m-%d %I:%M %p (Manila)")
+        else:
+            last_candle_time = int(df.iloc[-2]["time"])
+            ts = datetime.fromtimestamp(last_candle_time / 1000, tz=manila_tz).strftime("%Y-%m-%d %I:%M %p (Manila)")
+
+        # Format message
+        msg = (
+            f"{'🟩' if signal == 'BUY' else '🟥'} *{sym}* — STRONG {signal} (4/4)\n"
+            f"🕒 Time: {ts}\n"
+            f"💰 Price: {analysis['price']:.2f} USDT\n"
+            f"📊 RSI: {analysis['rsi']:.2f}\n"
+            f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
+        )
+        if analysis["sl"] and analysis["tp"]:
+            msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
+        msg += "\n" + format_checklist(analysis)
+
+        if signal == "BUY":
             buy_msgs.append(msg)
-
-        elif signal == "SELL" and analysis["bear_count"] == 4:
-            msg = (
-                f"🟥 *{sym}* — STRONG SELL (4/4)\n"
-                f"🕒 Time: {ts}\n"
-                f"💰 Price: {analysis['price']:.2f} USDT\n"
-                f"📊 RSI: {analysis['rsi']:.2f}\n"
-                f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
-            )
-            if analysis["sl"] and analysis["tp"]:
-                msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
-            msg += "\n" + format_checklist(analysis)
+        else:
             sell_msgs.append(msg)
 
     # Send grouped results
