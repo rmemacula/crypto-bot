@@ -312,6 +312,8 @@ def check_and_alert(context: CallbackContext):
                 save_last_signals(last_signals)
 
 #---------------status1d--------------------
+from datetime import datetime, timezone, timedelta
+
 def status1d(update: Update, context: CallbackContext):
     tf_label = "1d"
     interval = TIMEFRAMES[tf_label]
@@ -319,6 +321,7 @@ def status1d(update: Update, context: CallbackContext):
     update.message.reply_text("⏳ Scanning 1D Ichimoku + RSI signals (4/4 confirmed only)...")
 
     buy_msgs, sell_msgs = [], []
+    manila_tz = timezone(timedelta(hours=8))  # UTC+8 timezone
 
     for sym in SYMBOLS:
         df = fetch_ohlcv(sym, interval)
@@ -328,10 +331,15 @@ def status1d(update: Update, context: CallbackContext):
         analysis = analyze_df(df)
         signal = analysis["signal"]
 
+        # Get timestamp of last closed candle (convert milliseconds to datetime)
+        last_candle_time = int(df.iloc[-2]["time"])  # Binance gives ms timestamp
+        ts = datetime.fromtimestamp(last_candle_time / 1000, tz=manila_tz).strftime("%Y-%m-%d %H:%M %p (Manila)")
+
         # Only include if all 4 checklist items are met for that side
         if signal == "BUY" and analysis["bull_count"] == 4:
             msg = (
                 f"🟩 *{sym}* — STRONG BUY (4/4)\n"
+                f"🕒 Time: {ts}\n"
                 f"💰 Price: {analysis['price']:.2f} USDT\n"
                 f"📊 RSI: {analysis['rsi']:.2f}\n"
                 f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
@@ -344,6 +352,7 @@ def status1d(update: Update, context: CallbackContext):
         elif signal == "SELL" and analysis["bear_count"] == 4:
             msg = (
                 f"🟥 *{sym}* — STRONG SELL (4/4)\n"
+                f"🕒 Time: {ts}\n"
                 f"💰 Price: {analysis['price']:.2f} USDT\n"
                 f"📊 RSI: {analysis['rsi']:.2f}\n"
                 f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
@@ -372,7 +381,6 @@ def status1d(update: Update, context: CallbackContext):
         update.message.reply_text("⚪ No coins met all 4 Ichimoku checklist conditions (1D).")
 
     update.message.reply_text("✅ 1D scan complete.")
-
 
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context: CallbackContext):
