@@ -290,26 +290,34 @@ def check_and_alert(context: CallbackContext):
             df = fetch_ohlcv(symbol, interval)
             if df is None:
                 continue
+
             analysis = analyze_df(df)
             sig = analysis["signal"]
             k = key_for(symbol, tf_label)
-            prev = last_signals.get(k)
             sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}"
-            if sig in ("BUY", "SELL") and prev != sent_label:
-                tv_link = tradingview_link(symbol, tf_label)
-                safe_symbol = symbol.replace("_", "\\_").replace("-", "\\-")
-                msg = (
-                    f"🚨 *{safe_symbol}* ({tf_label}) — *{sig}*\n\n"
-                    f"💰 *Price:* {analysis['price']:.2f} USDT\n"
-                    f"📊 *RSI:* {analysis['rsi']:.2f}\n"
-                    f"🔗 [View on TradingView]({tv_link})\n\n"
-                )
-                if analysis["sl"] and analysis["tp"]:
-                    msg += f"🎯 *SL:* {analysis['sl']:.2f} | *TP:* {analysis['tp']:.2f}\n\n"
-                msg += format_checklist(analysis)
-                bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                last_signals[k] = sent_label
-                save_last_signals(last_signals)
+
+            # ✅ Only trigger alert when all 4 checklist items are confirmed
+            if (sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4):
+                prev = last_signals.get(k)
+                if prev != sent_label:
+                    tv_link = tradingview_link(symbol, tf_label)
+                    safe_symbol = symbol.replace("_", "\\_").replace("-", "\\-")
+
+                    msg = (
+                        f"🚨 *{safe_symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*\n\n"
+                        f"💰 *Price:* {analysis['price']:.2f} USDT\n"
+                        f"📊 *RSI:* {analysis['rsi']:.2f}\n"
+                        f"🔗 [View on TradingView]({tv_link})\n\n"
+                    )
+
+                    if analysis["sl"] and analysis["tp"]:
+                        msg += f"🎯 *SL:* {analysis['sl']:.2f} | *TP:* {analysis['tp']:.2f}\n\n"
+
+                    msg += format_checklist(analysis)
+
+                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                    last_signals[k] = sent_label
+                    save_last_signals(last_signals)
 
 #---------------status1d--------------------
 from datetime import datetime, timezone, timedelta
