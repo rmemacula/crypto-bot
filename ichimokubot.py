@@ -84,7 +84,7 @@ def tradingview_link(symbol, tf_label):
     return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}&interval={interval}"
 
 # ---------------- DATA FETCH ----------------
-ddef fetch_ohlcv(symbol, interval, limit=150):
+def fetch_ohlcv(symbol, interval, limit=150):
     url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         r = requests.get(url, timeout=10)
