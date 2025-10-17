@@ -481,7 +481,7 @@ def status1d(update: Update, context: CallbackContext):
             # Backtrack to first 4/4 candle (best-effort)
             trigger_time = None
             start_idx = max(103, len(df) - 100)
-            for i in range(start_idx, len(df) - 1):
+            for i in range(start_idx, len(df)):
                 sub_df = df.iloc[: i + 1]
                 if len(sub_df) < 104:
                     continue
@@ -576,7 +576,7 @@ def status1w(update: Update, context: CallbackContext):
 
             trigger_time = None
             start_idx = max(103, len(df) - 100)
-            for i in range(start_idx, len(df) - 1):
+            for i in range(start_idx, len(df)):
                 sub_df = df.iloc[: i + 1]
                 if len(sub_df) < 104:
                     continue
