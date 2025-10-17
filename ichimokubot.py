@@ -11,28 +11,33 @@ from telegram.ext import Updater, CommandHandler, CallbackContext
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
-# ---------------- REFRESH ----------------
-def refresh_pairs(context: CallbackContext):
-    """Daily refresh of Binance USDT pairs."""
-    global SYMBOLS
-    logging.info("🔄 Refreshing Binance USDT pairs...")
-    new_pairs = fetch_usdt_pairs()
-    if new_pairs:
-        added = set(new_pairs) - set(SYMBOLS)
-        removed = set(SYMBOLS) - set(new_pairs)
-        SYMBOLS = new_pairs
-        msg = f"♻️ Updated USDT pairs: {len(SYMBOLS)} total."
-        if added:
-            msg += f"\n➕ Added: {', '.join(sorted(list(added))[:10])}..."
-        if removed:
-            msg += f"\n➖ Removed: {', '.join(sorted(list(removed))[:10])}..."
-        logging.info(msg)
-        try:
-            context.bot.send_message(chat_id=CHAT_ID, text=msg)
-        except Exception:
-            pass
-    else:
-        logging.warning("⚠️ Could not refresh pairs — keeping old list.")
+# ---------------- MANUAL TOP 50 COINS ----------------
+MANUAL_TOP_50 = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT",
+    "AVAXUSDT", "TRXUSDT", "LINKUSDT", "MATICUSDT", "DOTUSDT", "LTCUSDT", "SHIBUSDT",
+    "UNIUSDT", "NEARUSDT", "AAVEUSDT", "ATOMUSDT", "SUIUSDT", "PEPEUSDT", "FLOKIUSDT",
+    "WIFUSDT", "SEIUSDT", "BONKUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "ENSUSDT",
+    "RUNEUSDT", "FTMUSDT", "GALAUSDT", "MEMEUSDT", "PYTHUSDT", "1000SATSUSDT",
+    "JUPUSDT", "ORDIUSDT", "NOTUSDT", "WLDUSDT", "ETCUSDT", "HBARUSDT", "ICPUSDT",
+    "BCHUSDT", "SANDUSDT", "MANAUSDT", "EGLDUSDT", "FILUSDT", "XLMUSDT", "ALGOUSDT",
+    "IMXUSDT", "APTUSDT"
+]
+
+def fetch_top_volume_pairs(limit=20):
+    """Fetch top N Binance USDT perpetual pairs by 24h quote volume."""
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        df = pd.DataFrame(data)
+        df = df[df["symbol"].str.endswith("USDT")]
+        df["quoteVolume"] = df["quoteVolume"].astype(float)
+        top = df.sort_values("quoteVolume", ascending=False).head(limit)
+        return top["symbol"].tolist()
+    except Exception as e:
+        logging.error(f"Error fetching top volume pairs: {e}")
+        return []
+	
 
 # ---------------- FETCH BINANCE USDT PAIRS ----------------
 def fetch_usdt_pairs():
@@ -54,8 +59,40 @@ def fetch_usdt_pairs():
         return []
 
 # Load all current USDT pairs
-SYMBOLS = fetch_usdt_pairs()
-logging.info(f"✅ Loaded {len(SYMBOLS)} Binance USDT trading pairs.")
+def load_symbols():
+    """Combine manual top 50 + top 20 by futures volume (unique)."""
+    manual = set(MANUAL_TOP_50)
+    top_vol = set(fetch_top_volume_pairs(20))
+    combined = sorted(list(manual | top_vol))  # merge, no duplicates
+    logging.info(f"✅ Loaded {len(combined)} symbols (Top 50 + Top 20 by volume).")
+    return combined
+
+SYMBOLS = load_symbols()
+
+# ---------------- REFRESH ----------------
+def refresh_pairs(context: CallbackContext):
+    """Daily refresh: manual + top 20 high-volume Binance USDT futures pairs."""
+    global SYMBOLS
+    logging.info("🔄 Refreshing symbol list (Top 50 + Top 20)...")
+
+    new_symbols = load_symbols()
+    added = set(new_symbols) - set(SYMBOLS)
+    removed = set(SYMBOLS) - set(new_symbols)
+    SYMBOLS = new_symbols
+
+    msg = f"♻️ Updated symbols: {len(SYMBOLS)} total."
+    if added:
+        msg += f"\n➕ Added: {', '.join(sorted(list(added))[:10])}..."
+    if removed:
+        msg += f"\n➖ Removed: {', '.join(sorted(list(removed))[:10])}..."
+
+    logging.info(msg)
+    try:
+        context.bot.send_message(chat_id=CHAT_ID, text=msg)
+    except Exception:
+        pass
+
+
 TIMEFRAMES = {"1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w"}
 DATA_FILE = "last_signals.json"
 
@@ -550,6 +587,8 @@ def main():
     logging.info("Bot started")
     updater.start_polling()
     updater.idle()
+    updater.bot.send_message(chat_id=CHAT_ID, text="🚀 Bot restarted and running!")
+
 
 if __name__ == "__main__":
     main()
