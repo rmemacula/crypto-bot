@@ -11,22 +11,51 @@ from telegram.ext import Updater, CommandHandler, CallbackContext
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 
-SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "XRPUSDT", "BNBUSDT", "SOLUSDT",
-    "DOGEUSDT", "TRXUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT",
-    "HYPEUSDT", "XLMUSDT", "SUIUSDT",
-    # plus more:
-    "MATICUSDT", "LTCUSDT", "DOTUSDT", "NEARUSDT", "ATOMUSDT",
-    "UNIUSDT", "FILUSDT", "ICPUSDT", "APEUSDT", "MKRUSDT",
-    "EOSUSDT", "AAVEUSDT", "SNXUSDT", "KSMUSDT", "ENJUSDT",
-    "GRTUSDT", "SANDUSDT", "AXSUSDT", "ICPUSDT", "ALGOUSDT",
-    "FTMUSDT", "VETUSDT", "THETAUSDT", "CHZUSDT", "XMRUSDT",
-    "ZECUSDT", "EOSUSDT", "FLOWUSDT", "KLAYUSDT", "MANAUSDT",
-    "QNTUSDT", "CRVUSDT", "CELOUSDT", "KAVAUSDT", "NEOUSDT",
-    "RPLUSDT", "LDOUSDT", "RUNEUSDT", "CHSBUSDT",
-    # etc (ensure 50 total non-stable symbols)
-]
+# ---------------- REFRESH ----------------
+def refresh_pairs(context: CallbackContext):
+    """Daily refresh of Binance USDT pairs."""
+    global SYMBOLS
+    logging.info("🔄 Refreshing Binance USDT pairs...")
+    new_pairs = fetch_usdt_pairs()
+    if new_pairs:
+        added = set(new_pairs) - set(SYMBOLS)
+        removed = set(SYMBOLS) - set(new_pairs)
+        SYMBOLS = new_pairs
+        msg = f"♻️ Updated USDT pairs: {len(SYMBOLS)} total."
+        if added:
+            msg += f"\n➕ Added: {', '.join(sorted(list(added))[:10])}..."
+        if removed:
+            msg += f"\n➖ Removed: {', '.join(sorted(list(removed))[:10])}..."
+        logging.info(msg)
+        try:
+            context.bot.send_message(chat_id=CHAT_ID, text=msg)
+        except Exception:
+            pass
+    else:
+        logging.warning("⚠️ Could not refresh pairs — keeping old list.")
 
+# ---------------- FETCH BINANCE USDT PAIRS ----------------
+def fetch_usdt_pairs():
+    """Fetch all Binance USDT perpetual futures pairs."""
+    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        symbols = [
+            s["symbol"]
+            for s in data["symbols"]
+            if s["quoteAsset"] == "USDT"
+            and s["contractType"] == "PERPETUAL"
+            and s["status"] == "TRADING"
+        ]
+        return sorted(symbols)
+    except Exception as e:
+        logging.error(f"Error fetching futures pairs: {e}")
+        return []
+
+# Load all current USDT pairs
+SYMBOLS = fetch_usdt_pairs()
+logging.info(f"✅ Loaded {len(SYMBOLS)} Binance USDT trading pairs.")
 TIMEFRAMES = {"1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w"}
 DATA_FILE = "last_signals.json"
 
@@ -517,6 +546,7 @@ def main():
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=300, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
+    jq.run_repeating(refresh_pairs, interval=86400, first=60)  # refresh every 24 hours
     logging.info("Bot started")
     updater.start_polling()
     updater.idle()
