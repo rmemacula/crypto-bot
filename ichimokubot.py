@@ -27,7 +27,7 @@ SYMBOLS = [
     # etc (ensure 50 total non-stable symbols)
 ]
 
-TIMEFRAMES = {"1h": "1h", "4h": "4h", "1d": "1d"}
+TIMEFRAMES = {"1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w"}
 DATA_FILE = "last_signals.json"
 
 logging.basicConfig(level=logging.INFO)
@@ -414,6 +414,93 @@ def status1d(update: Update, context: CallbackContext):
 
     update.message.reply_text("✅ 1D scan complete.")
 
+# ---------------- status1wk ----------------
+def status1w(update: Update, context: CallbackContext):
+    tf_label = "1w"
+    interval = TIMEFRAMES[tf_label]
+
+    update.message.reply_text("⏳ Scanning 1W Ichimoku + RSI signals (4/4 confirmed only)...")
+
+    buy_msgs, sell_msgs = [], []
+    manila_tz = timezone(timedelta(hours=8))
+
+    for sym in SYMBOLS:
+        try:
+            df = fetch_ohlcv(sym, interval)
+            if df is None or len(df) < 104:
+                continue
+
+            analysis = analyze_df(df)
+            signal = analysis.get("signal", "Neutral")
+
+            if not ((signal == "BUY" and analysis.get("bull_count", 0) == 4) or
+                    (signal == "SELL" and analysis.get("bear_count", 0) == 4)):
+                continue
+
+            trigger_time = None
+            start_idx = max(103, len(df) - 100)
+            for i in range(start_idx, len(df) - 1):
+                sub_df = df.iloc[: i + 1]
+                if len(sub_df) < 104:
+                    continue
+                sub_analysis = analyze_df(sub_df)
+                if signal == "BUY" and sub_analysis.get("bull_count", 0) == 4:
+                    trigger_time = int(sub_df.iloc[-2]["time"])
+                    break
+                if signal == "SELL" and sub_analysis.get("bear_count", 0) == 4:
+                    trigger_time = int(sub_df.iloc[-2]["time"])
+                    break
+
+            if trigger_time is None:
+                trigger_time = int(df.iloc[-2]["time"])
+
+            ts = datetime.fromtimestamp(trigger_time / 1000, tz=manila_tz).strftime("%Y-%m-%d %I:%M %p (Manila)")
+
+            safe_symbol = sym.replace("_", "\\_").replace("-", "\\-")
+            price_str = f"{analysis['price']:.2f} USDT" if analysis.get("price") is not None else "N/A"
+            rsi_str = f"{analysis['rsi']:.2f}" if analysis.get("rsi") is not None else "N/A"
+
+            msg = (
+                f"{'🟩' if signal == 'BUY' else '🟥'} *{safe_symbol}* — STRONG {signal} (4/4)\n"
+                f"🕒 Time: {ts}\n"
+                f"💰 Price: {price_str}\n"
+                f"📊 RSI: {rsi_str}\n"
+                f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n"
+            )
+
+            if analysis.get("sl") is not None and analysis.get("tp") is not None:
+                msg += f"🎯 SL: {analysis['sl']:.2f} | TP: {analysis['tp']:.2f}\n"
+
+            msg += "\n" + format_checklist(analysis)
+
+            if signal == "BUY":
+                buy_msgs.append(msg)
+            else:
+                sell_msgs.append(msg)
+
+        except Exception as e:
+            logging.exception(f"status1w error for {sym}: {e}")
+            continue
+
+    if buy_msgs:
+        update.message.reply_text(
+            "🟩 *STRONG BUY signals (4/4 confirmed, 1W)*\n\n" + "\n\n".join(buy_msgs),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+
+    if sell_msgs:
+        update.message.reply_text(
+            "🟥 *STRONG SELL signals (4/4 confirmed, 1W)*\n\n" + "\n\n".join(sell_msgs),
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+
+    if not buy_msgs and not sell_msgs:
+        update.message.reply_text("⚪ No coins met all 4 Ichimoku checklist conditions (1W).")
+
+    update.message.reply_text("✅ 1W scan complete.")
+
 
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context: CallbackContext):
@@ -426,6 +513,7 @@ def main():
     dp.add_handler(CommandHandler("test", test))
     dp.add_handler(CommandHandler("status", status))
     dp.add_handler(CommandHandler("status1d", status1d))
+    dp.add_handler(CommandHandler("status1w", status1w))
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=300, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
