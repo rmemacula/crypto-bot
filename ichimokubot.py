@@ -244,22 +244,65 @@ def status(update, context):
 def check_and_alert(context):
     global last_signals
     bot = context.bot
+
     for symbol in SYMBOLS:
         for tf_label, interval in TIMEFRAMES.items():
             df = fetch_ohlcv(symbol, interval)
-            if df is None or len(df) < 104: continue
+            if df is None or len(df) < 104:
+                continue
+
             analysis = analyze_df(df)
-            sig, k = analysis["signal"], key_for(symbol, tf_label)
+            sig = analysis["signal"]
+            k = key_for(symbol, tf_label)
+
             crt_tag = "CRT_BULL" if analysis.get("crt_bull") else ("CRT_BEAR" if analysis.get("crt_bear") else "CRT_NONE")
-            sent_label, prev = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}|{crt_tag}", last_signals.get(k)
+            sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}|{crt_tag}"
+            prev = last_signals.get(k)
+
+            # ✅ Main Ichimoku 4/4 alert
             if (sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4):
                 if prev != sent_label:
                     tv = tradingview_link(symbol, tf_label)
-                    msg = (f"🚨 *{symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*{volume_tag(symbol)}\n\n"
-                           f"💰 *Price:* {analysis['price']:.2f}\n📊 *RSI:* {analysis['rsi']:.2f}\n"
-                           f"🔗 [View on TradingView]({tv})\n\n{format_checklist(analysis)}")
+                    msg = (
+                        f"🚨 *{symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*{volume_tag(symbol)}\n\n"
+                        f"💰 *Price:* {analysis['price']:.2f}\n"
+                        f"📊 *RSI:* {analysis['rsi']:.2f}\n"
+                        f"🔗 [View on TradingView]({tv})\n\n"
+                        f"{format_checklist(analysis)}"
+                    )
                     bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                    last_signals[k] = sent_label; save_last_signals(last_signals)
+                    last_signals[k] = sent_label
+                    save_last_signals(last_signals)
+
+            # 🕯️ CRT alert ONLY if CRT aligns with Ichimoku 4/4 direction
+            aligned_bullish_crt = analysis.get("crt_bull") and (sig == "BUY" and analysis["bull_count"] == 4)
+            aligned_bearish_crt = analysis.get("crt_bear") and (sig == "SELL" and analysis["bear_count"] == 4)
+            if (aligned_bullish_crt or aligned_bearish_crt) and prev != sent_label:
+                tv = tradingview_link(symbol, tf_label)
+                side = "Bullish" if aligned_bullish_crt else "Bearish"
+                msg = (
+                    f"🕯️ *{symbol}* ({tf_label}) — CRT {side} *aligned* with Ichimoku 4/4 {sig}{volume_tag(symbol)}\n\n"
+                    f"💰 *Price:* {analysis['price']:.2f}\n"
+                    f"📊 *RSI:* {analysis['rsi']:.2f}\n"
+                    f"🔗 [View on TradingView]({tv})\n\n"
+                    f"• Prev H/L: {analysis['crt_prev_high']:.4f}/{analysis['crt_prev_low']:.4f}\n"
+                    f"• Curr H/L/Close: {analysis['crt_curr_high']:.4f}/{analysis['crt_curr_low']:.4f}/{analysis['crt_curr_close']:.4f}\n\n"
+                    f"{format_checklist(analysis)}"
+                )
+                bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                last_signals[k] = sent_label
+                save_last_signals(last_signals)
+
+            # ⚪ Exit from strong zone (optional)
+            elif prev and ("BUY|4|0" in prev or "SELL|0|4" in prev):
+                if not ((sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4)):
+                    msg = (
+                        f"⚪ *{symbol}* ({tf_label}) — exited strong {prev.split('|')[0]} zone.\n"
+                        f"Now: {sig} ({analysis['bull_count']}/4 bull, {analysis['bear_count']}/4 bear)"
+                    )
+                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                    last_signals[k] = sent_label
+                    save_last_signals(last_signals)
 
 # ---------------- STATUS 1D ----------------
 def status1d(update, context):
@@ -304,6 +347,19 @@ def status1w(update, context):
     if sell_msgs: update.message.reply_text("🟥 *STRONG SELLs (1W)*\n\n"+"\n\n".join(sell_msgs), parse_mode="Markdown")
     if not buy_msgs and not sell_msgs: update.message.reply_text("⚪ No 1W 4/4 signals found.")
     update.message.reply_text("✅ 1W scan complete.")
+# ----------------STATUS VOL-----------------------
+def statusvolume(update, context):
+    """Show currently monitored top-volume coins."""
+    if not TOP_VOLUME_SYMBOLS:
+        return update.message.reply_text("⚠️ No top volume data available yet.")
+
+    msg = "🔥 *Top 20 High-Volume Coins Currently Monitored*\n\n"
+    sorted_syms = sorted(list(TOP_VOLUME_SYMBOLS))
+    for i, sym in enumerate(sorted_syms, 1):
+        msg += f"{i:02d}. {sym}\n"
+
+    msg += "\n♻️ This list refreshes automatically every 6 hours."
+    update.message.reply_text(msg, parse_mode="Markdown")
 
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context): context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
@@ -316,10 +372,11 @@ def main():
     dp.add_handler(CommandHandler("status", status))
     dp.add_handler(CommandHandler("status1d", status1d))
     dp.add_handler(CommandHandler("status1w", status1w))
+    dp.add_handler(CommandHandler("statusvolume", statusvolume))
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=60, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
-    jq.run_repeating(refresh_pairs, interval=21600, first=60)
+    jq.run_repeating(refresh_pairs, interval=14400, first=60)
     updater.start_polling()
     updater.bot.send_message(chat_id=CHAT_ID, text="🚀 Bot restarted and running!")
     updater.idle()
