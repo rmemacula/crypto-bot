@@ -118,8 +118,90 @@ def key_for(symbol, tf): return f"{symbol}_{tf}"
 
 # ---------------- TRADINGVIEW ----------------
 def tradingview_link(symbol, tf_label):
+    """Return correct TradingView link for Binance symbols (spot or perpetual)."""
     tf_map = {"1h": "60", "4h": "240", "1d": "1D", "1w": "1W"}
-    return f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol}&interval={tf_map.get(tf_label, '60')}"
+
+    # --- Full special map for mismatched tickers ---
+    special_map = {
+        # --- 1000-prefixed / unit-based tickers ---
+        "1000SATSUSDT": "1000SATSUSD.P",
+        "1000BONKUSDT": "1000BONKUSD.P",
+        "1000PEPEUSDT": "1000PEPEUSD.P",
+        "1000SHIBUSDT": "1000SHIBUSD.P",
+        "1000FLOKIUSDT": "1000FLOKIUSD.P",
+
+        # --- Meme & community coins ---
+        "PEPEUSDT": "PEPEUSD.P",
+        "BONKUSDT": "BONKUSD.P",
+        "WIFUSDT": "WIFUSD.P",
+        "MEMEUSDT": "MEMEUSD.P",
+        "DOGEUSDT": "DOGEUSD.P",
+        "SHIBUSDT": "SHIBUSD.P",
+        "FLOKIUSDT": "FLOKIUSD.P",
+
+        # --- Ecosystem & Layer-2 / Layer-1 ---
+        "ARBUSDT": "ARBUSDPERP",
+        "OPUSDT": "OPUSDPERP",
+        "SUIUSDT": "SUIUSD.P",
+        "TIAUSDT": "TIAUSD.P",
+        "APTUSDT": "APTUSD.P",
+        "IMXUSDT": "IMXUSD.P",
+        "SEIUSDT": "SEIUSD.P",
+        "INJUSDT": "INJUSD.P",
+        "PYTHUSDT": "PYTHUSD.P",
+        "JUPUSDT": "JUPUSD.P",
+        "NOTUSDT": "NOTUSD.P",
+        "WLDUSDT": "WLDUSD.P",
+        "ORDIUSDT": "ORDIUSD.P",
+        "RUNEUSDT": "RUNEUSD.P",
+        "NEARUSDT": "NEARUSD.P",
+        "LINKUSDT": "LINKUSD.P",
+        "AVAXUSDT": "AVAXUSD.P",
+        "SOLUSDT": "SOLUSD.P",
+
+        # --- Misc. Perpetual anomalies ---
+        "ENSUSDT": "ENSUSD.P",
+        "ATOMUSDT": "ATOMUSD.P",
+        "MATICUSDT": "MATICUSD.P",
+        "FTMUSDT": "FTMUSD.P",
+        "GALAUSDT": "GALAUSD.P",
+        "FILUSDT": "FILUSD.P",
+        "HBARUSDT": "HBARUSD.P",
+        "ICPUSDT": "ICPUSD.P",
+        "ALGOUSDT": "ALGOUSD.P",
+        "SANDUSDT": "SANDUSD.P",
+        "MANAUSDT": "MANAUSD.P",
+        "EGLDUSDT": "EGLDUSD.P",
+        "BCHUSDT": "BCHUSD.P",
+        "AAVEUSDT": "AAVEUSD.P",
+        "UNIUSDT": "UNIUSD.P",
+
+        # --- Newer coins and exceptions ---
+        "KGENUSDT": "KGENUSD.P",
+        "POPCATUSDT": "POPCATUSD.P",
+        "TURBOUSDT": "TURBOUSD.P",
+        "MOGUSDT": "MOGUSD.P",
+        "PENGUSDT": "PENGUSD.P",
+        "BOOKUSDT": "BOOKUSD.P",
+    }
+
+    # --- Clean up base symbol ---
+    base = symbol.replace("USDT", "")
+
+    # --- Determine which version to use ---
+    if symbol in special_map:
+        tv_symbol = special_map[symbol]
+    else:
+        # Assume high-volume pairs (from Binance Futures) are perpetual
+        is_futures = symbol in TOP_VOLUME_SYMBOLS
+        if is_futures:
+            tv_symbol = f"{base}USD.P"
+        else:
+            # Otherwise assume it's a spot chart
+            tv_symbol = f"{base}USDT"
+
+    # --- Construct TradingView link ---
+    return f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}&interval={tf_map.get(tf_label, '60')}"
 
 # ---------------- FETCH DATA ----------------
 def fetch_ohlcv(symbol, interval, limit=150):
