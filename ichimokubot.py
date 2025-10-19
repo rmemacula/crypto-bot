@@ -177,7 +177,7 @@ def tradingview_link(symbol, tf_label):
         "UNIUSDT": "UNIUSD.P",
 
         # --- Newer coins and exceptions ---
-        "KGENUSDT": "KGENUSD.P",
+        "KGENUSDT": "KGENUSDT.P",
         "POPCATUSDT": "POPCATUSD.P",
         "TURBOUSDT": "TURBOUSD.P",
         "MOGUSDT": "MOGUSD.P",
