@@ -4,6 +4,7 @@ import logging
 import requests
 import pandas as pd
 import numpy as np
+import pagibig_scanner
 from datetime import datetime, timezone, timedelta
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
@@ -366,6 +367,15 @@ def statusvolume(update, context):
     msg += "\n♻️ This list refreshes automatically every 6 hours."
     update.message.reply_text(msg, parse_mode="Markdown")
 
+def pagibiglatest(update, context):
+    update.message.reply_text("🔄 Fetching LIVE Pag-IBIG data…")
+    try:
+        msg = pagibig_scanner.get_live_latest_summary()
+        update.message.reply_text(msg, disable_web_page_preview=True)
+    except Exception as e:
+        update.message.reply_text(f"❌ /pagibiglatest failed:\n{e}")
+
+
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context): context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
 
@@ -378,6 +388,7 @@ def main():
     dp.add_handler(CommandHandler("status1d", status1d))
     dp.add_handler(CommandHandler("status1w", status1w))
     dp.add_handler(CommandHandler("statusvolume", statusvolume))
+    dp.add_handler(CommandHandler("pagibiglatest", pagibiglatest))
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=60, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)

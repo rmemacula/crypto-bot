@@ -191,6 +191,29 @@ def scan_job() -> None:
                 tg_send(f"⚠️ Pag-IBIG scanner error (loc={loc}): {e}")
             except Exception:
                 pass
+def get_live_latest_summary() -> str:
+    """
+    LIVE fetch from Pag-IBIG site.
+    Does NOT read/write pagibig_state.json.
+    """
+    lines = ["🟢 Pag-IBIG 4PH LIVE UPDATE", ""]
+
+    for loc, url in URLS.items():
+        try:
+            asof_dt, projects = fetch_and_parse(url)
+            asof_str = asof_dt.strftime("%B %d, %Y") if asof_dt else "Unknown"
+
+            lines.append(f"🏠 Location: loc={loc}")
+            lines.append(f"📅 As of: {asof_str}")
+            lines.append(f"🧾 Projects found: {len(projects)}")
+            lines.append("")
+
+        except Exception as e:
+            lines.append(f"🏠 Location: loc={loc}")
+            lines.append(f"❌ Live fetch failed: {e}")
+            lines.append("")
+
+    return "\n".join(lines)
 
 
 def main():
