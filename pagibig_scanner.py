@@ -3,7 +3,7 @@ import re
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,6 +26,8 @@ REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 TZ_NAME = os.getenv("TZ", "Asia/Manila")
 TZ = pytz.timezone(TZ_NAME)
 
+BASE_URL = "https://www.pagibigfundservices.com"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -35,6 +37,7 @@ HEADERS = {
 }
 
 ASOF_REGEX = re.compile(r"As of\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", re.IGNORECASE)
+DETAILS_LINK_REGEX = re.compile(r"/MagpalistaSa4PH/Project/Details/\d+", re.IGNORECASE)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
@@ -78,111 +81,202 @@ def parse_asof_date(text: str) -> Optional[datetime]:
         return None
 
 
-def extract_projects(soup: BeautifulSoup, base_url: str) -> Dict[str, Dict[str, str]]:
-    projects: Dict[str, Dict[str, str]] = {}
-
-    for a in soup.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
-        name = " ".join(a.get_text(" ", strip=True).split())
-
-        if not href or not name or len(name) < 3:
-            continue
-        if "javascript:" in href.lower():
-            continue
-        if "project" not in href.lower():
-            continue
-
-        if href.startswith("/"):
-            full_url = base_url.rstrip("/") + href
-        elif href.startswith("http"):
-            full_url = href
-        else:
-            full_url = base_url.rstrip("/") + "/" + href
-
-        id_match = re.search(r"(?i)(?:\b|[?&])(id|projectid|pid)=([^&]+)", full_url)
-        key = f"{id_match.group(1).lower()}={id_match.group(2)}" if id_match else full_url
-
-        if name.lower() in {"home", "projects", "back", "next", "previous"}:
-            continue
-
-        projects[key] = {"name": name, "url": full_url}
-
-    return projects
-
-
-def fetch_and_parse(url: str) -> Tuple[Optional[datetime], Dict[str, Dict[str, str]]]:
+def fetch_soup(url: str) -> BeautifulSoup:
     r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
+    return BeautifulSoup(r.text, "html.parser")
 
-    soup = BeautifulSoup(r.text, "html.parser")
+
+def extract_details_links(list_soup: BeautifulSoup) -> List[str]:
+    """
+    From the Projects list page, extract unique Details links.
+    """
+    links = []
+    seen = set()
+
+    for a in list_soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        if not DETAILS_LINK_REGEX.search(href):
+            continue
+
+        if href.startswith("http"):
+            full = href
+        else:
+            full = BASE_URL.rstrip("/") + (href if href.startswith("/") else "/" + href)
+
+        if full not in seen:
+            seen.add(full)
+            links.append(full)
+
+    return links
+
+
+def extract_project_name_from_details(details_soup: BeautifulSoup) -> str:
+    """
+    Best-effort extraction of project name from Details page.
+    Usually appears as a prominent header (h2/h3).
+    """
+    for tag in ["h2", "h3", "h1"]:
+        hs = details_soup.find_all(tag)
+        candidates = []
+        for h in hs:
+            txt = " ".join(h.get_text(" ", strip=True).split())
+            if txt and len(txt) >= 3:
+                candidates.append(txt)
+        if candidates:
+            # Prefer the last header (often the specific project name, not generic title)
+            return candidates[-1]
+
+    if details_soup.title and details_soup.title.string:
+        return " ".join(details_soup.title.string.strip().split())
+
+    return "Unknown Project"
+
+
+def fetch_details_asof(details_url: str) -> Tuple[str, Optional[datetime], str]:
+    """
+    Fetch details page and return (project_name, asof_dt, asof_str).
+    """
+    soup = fetch_soup(details_url)
     page_text = soup.get_text("\n", strip=True)
 
     asof_dt = parse_asof_date(page_text)
-    projects = extract_projects(soup, base_url="https://www.pagibigfundservices.com")
-    return asof_dt, projects
+    asof_str = asof_dt.strftime("%B %d, %Y") if asof_dt else "Unknown"
+
+    name = extract_project_name_from_details(soup)
+    return name, asof_dt, asof_str
 
 
-# ---------------- LOGIC ----------------
-def format_new_projects(loc: int, asof: Optional[datetime], new_items: Dict[str, Dict[str, str]]) -> str:
-    asof_str = asof.strftime("%B %d, %Y") if asof else "Unknown"
-    lines = [f"🏠 Pag-IBIG 4PH Update (loc={loc})", f"📅 As of: {asof_str}", ""]
+# ---------------- LATEST LIVE (what /pagibiglatest should call) ----------------
+def get_latest_property_live() -> str:
+    """
+    LIVE: checks all project Details pages from loc=1 and loc=2,
+    then returns the property/properties with the newest 'As of' date.
+    """
+    overall_latest: Optional[datetime] = None
+    winners = []  # list of dicts: {"loc": int, "name": str, "asof": str, "url": str}
 
-    if not new_items:
-        lines.append("No new projects found (compared to saved list).")
-        return "\n".join(lines)
+    for loc, list_url in URLS.items():
+        try:
+            list_soup = fetch_soup(list_url)
+            detail_urls = extract_details_links(list_soup)
 
-    lines.append(f"✅ New projects found: {len(new_items)}\n")
+            if not detail_urls:
+                logging.warning("No details links found for loc=%s", loc)
+                continue
 
-    max_show = 25
-    for i, item in enumerate(list(new_items.values())[:max_show], start=1):
-        lines.append(f"{i}. {item['name']}")
-        lines.append(f"   {item['url']}")
+            for durl in detail_urls:
+                try:
+                    name, asof_dt, asof_str = fetch_details_asof(durl)
+                    if asof_dt is None:
+                        continue
 
-    if len(new_items) > max_show:
-        lines.append(f"\n…plus {len(new_items) - max_show} more.")
+                    if overall_latest is None or asof_dt > overall_latest:
+                        overall_latest = asof_dt
+                        winners = [{"loc": loc, "name": name, "asof": asof_str, "url": durl}]
+                    elif overall_latest is not None and asof_dt == overall_latest:
+                        winners.append({"loc": loc, "name": name, "asof": asof_str, "url": durl})
+                except Exception:
+                    continue
+
+        except Exception as e:
+            logging.exception("Live latest fetch failed for loc=%s: %s", loc, e)
+
+    if overall_latest is None or not winners:
+        return "❌ Could not determine the latest property (no per-project 'As of' dates found)."
+
+    latest_asof = winners[0]["asof"]
+    lines = [
+        "🔥 Latest 4PH Property (LIVE)",
+        f"📅 Latest 'As of': {latest_asof}",
+        "",
+        "🏠 Property/Properties with that latest date:"
+    ]
+
+    for i, w in enumerate(winners, start=1):
+        lines.append(f"{i}. {w['name']} (loc={w['loc']})")
+        lines.append(f"   {w['url']}")
 
     return "\n".join(lines)
 
 
+# ---------------- SCAN JOB (scheduled alert every 4 hours) ----------------
 def scan_job() -> None:
+    """
+    Scheduled scan logic:
+    - find latest 'As of' per loc (from Details pages)
+    - if latest asof moved forward since last saved => notify
+    - save snapshot of latest per loc
+    """
     state = load_state()
+    locs_state = state.setdefault("locs", {})
 
-    for loc, url in URLS.items():
+    for loc, list_url in URLS.items():
         try:
-            logging.info("Scanning loc=%s ...", loc)
-            asof_dt, projects = fetch_and_parse(url)
+            logging.info("Scanning (details) loc=%s ...", loc)
 
-            loc_state = state.setdefault("locs", {}).setdefault(str(loc), {})
-            prev_asof_str = loc_state.get("asof")
-            prev_projects = loc_state.get("projects", {})
+            list_soup = fetch_soup(list_url)
+            detail_urls = extract_details_links(list_soup)
 
-            new_keys = set(projects.keys()) - set(prev_projects.keys())
-            new_items = {k: projects[k] for k in new_keys}
+            # find newest for this loc
+            latest_dt = None
+            latest_name = None
+            latest_url = None
+
+            for durl in detail_urls:
+                try:
+                    name, asof_dt, asof_str = fetch_details_asof(durl)
+                    if asof_dt is None:
+                        continue
+                    if latest_dt is None or asof_dt > latest_dt:
+                        latest_dt = asof_dt
+                        latest_name = name
+                        latest_url = durl
+                except Exception:
+                    continue
+
+            if latest_dt is None:
+                logging.warning("No per-project dates found for loc=%s", loc)
+                continue
+
+            latest_asof_str = latest_dt.strftime("%B %d, %Y")
+
+            loc_key = str(loc)
+            prev_latest_asof = locs_state.get(loc_key, {}).get("latest_asof")
 
             should_notify = False
-
-            if asof_dt and prev_asof_str:
+            if prev_latest_asof:
                 try:
-                    prev_asof_dt = datetime.strptime(prev_asof_str, "%B %d, %Y")
-                    if asof_dt > prev_asof_dt:
+                    prev_dt = datetime.strptime(prev_latest_asof, "%B %d, %Y")
+                    if latest_dt > prev_dt:
                         should_notify = True
                 except ValueError:
-                    pass
-
-            if new_items:
-                should_notify = True
+                    should_notify = True
+            else:
+                # first run -> don't spam, but you can set to True if you want
+                should_notify = False
 
             if should_notify:
-                tg_send(format_new_projects(loc, asof_dt, new_items))
-                logging.info("Notified loc=%s. New=%s", loc, len(new_items))
+                msg = (
+                    f"🆕 Newer 4PH update detected (loc={loc})\n"
+                    f"📅 Latest 'As of': {latest_asof_str}\n"
+                    f"🏠 Property: {latest_name}\n"
+                    f"{latest_url}"
+                )
+                tg_send(msg)
+                logging.info("Notified loc=%s latest=%s", loc, latest_asof_str)
             else:
-                logging.info("No changes worth notifying for loc=%s.", loc)
+                logging.info("No newer 'As of' for loc=%s (latest=%s).", loc, latest_asof_str)
 
             # Save snapshot
-            if asof_dt:
-                loc_state["asof"] = asof_dt.strftime("%B %d, %Y")
-            loc_state["projects"] = projects
-            state["locs"][str(loc)] = loc_state
+            locs_state[loc_key] = {
+                "latest_asof": latest_asof_str,
+                "latest_name": latest_name or "Unknown",
+                "latest_url": latest_url or "",
+                "last_checked": datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            }
             save_state(state)
 
         except Exception as e:
@@ -191,29 +285,6 @@ def scan_job() -> None:
                 tg_send(f"⚠️ Pag-IBIG scanner error (loc={loc}): {e}")
             except Exception:
                 pass
-def get_live_latest_summary() -> str:
-    """
-    LIVE fetch from Pag-IBIG site.
-    Does NOT read/write pagibig_state.json.
-    """
-    lines = ["🟢 Pag-IBIG 4PH LIVE UPDATE", ""]
-
-    for loc, url in URLS.items():
-        try:
-            asof_dt, projects = fetch_and_parse(url)
-            asof_str = asof_dt.strftime("%B %d, %Y") if asof_dt else "Unknown"
-
-            lines.append(f"🏠 Location: loc={loc}")
-            lines.append(f"📅 As of: {asof_str}")
-            lines.append(f"🧾 Projects found: {len(projects)}")
-            lines.append("")
-
-        except Exception as e:
-            lines.append(f"🏠 Location: loc={loc}")
-            lines.append(f"❌ Live fetch failed: {e}")
-            lines.append("")
-
-    return "\n".join(lines)
 
 
 def main():
@@ -223,14 +294,10 @@ def main():
     except Exception as e:
         logging.warning("Startup Telegram ping failed: %s", e)
 
-    # Background scheduler (non-blocking)
     sched = BackgroundScheduler(timezone=TZ)
-
-    # Run immediately once, then every 4 hours
     sched.add_job(scan_job, "interval", hours=4, next_run_time=datetime.now(TZ), id="pagibig_scan")
     sched.start()
 
-    # Keep module alive if run standalone
     logging.info("Pag-IBIG scheduler running (every 4 hours). TZ=%s", TZ_NAME)
     try:
         while True:
@@ -238,3 +305,7 @@ def main():
             time.sleep(3600)
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    main()

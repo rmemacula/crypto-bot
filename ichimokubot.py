@@ -368,13 +368,12 @@ def statusvolume(update, context):
     update.message.reply_text(msg, parse_mode="Markdown")
 
 def pagibiglatest(update, context):
-    update.message.reply_text("🔄 Fetching LIVE Pag-IBIG data…")
+    update.message.reply_text("🔄 Fetching LIVE latest property…")
     try:
-        msg = pagibig_scanner.get_live_latest_summary()
+        msg = pagibig_scanner.get_latest_property_live()
         update.message.reply_text(msg, disable_web_page_preview=True)
     except Exception as e:
         update.message.reply_text(f"❌ /pagibiglatest failed:\n{e}")
-
 
 # ---------------- HEARTBEAT ----------------
 def heartbeat(context): context.bot.send_message(chat_id=CHAT_ID, text="💓 Bot is alive")
