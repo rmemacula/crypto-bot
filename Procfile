@@ -1,1 +1,1 @@
-web: python ichimokubot.py
+web: python runner.py
