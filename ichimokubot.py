@@ -368,9 +368,9 @@ def statusvolume(update, context):
     update.message.reply_text(msg, parse_mode="Markdown")
 
 def pagibiglatest(update, context):
-    update.message.reply_text("🔄 Fetching LIVE latest property…")
+    update.message.reply_text("🔄 Fetching LIVE latest per location…")
     try:
-        msg = pagibig_scanner.get_latest_property_live()
+        msg = pagibig_scanner.get_latest_properties_by_loc_live()
         update.message.reply_text(msg, disable_web_page_preview=True)
     except Exception as e:
         update.message.reply_text(f"❌ /pagibiglatest failed:\n{e}")

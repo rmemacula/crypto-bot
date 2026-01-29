@@ -113,27 +113,63 @@ def extract_details_links(list_soup: BeautifulSoup) -> List[str]:
     return links
 
 
+BAD_TITLES = {
+    "quantity", "no. of units", "no of units", "paalala", "paumanhin",
+    "browse our website", "membership", "savings", "tingnan ang ibang 4ph",
+    "tingnan ang ibang 4ph projects", "compute", "30 years term"
+}
+
 def extract_project_name_from_details(details_soup: BeautifulSoup) -> str:
     """
-    Best-effort extraction of project name from Details page.
-    Usually appears as a prominent header (h2/h3).
+    Finds the heading closest BEFORE the 'As of ...' text.
+    Avoids headings like 'Quantity' and 'No. of Units'.
     """
-    for tag in ["h2", "h3", "h1"]:
-        hs = details_soup.find_all(tag)
-        candidates = []
-        for h in hs:
+    full_text = details_soup.get_text("\n", strip=True)
+    m = ASOF_REGEX.search(full_text)
+
+    # If page has no "As of", fall back later
+    asof_pos = m.start() if m else None
+
+    candidates = []
+    for tag in ["h1", "h2", "h3", "h4"]:
+        for h in details_soup.find_all(tag):
             txt = " ".join(h.get_text(" ", strip=True).split())
-            if txt and len(txt) >= 3:
-                candidates.append(txt)
-        if candidates:
-            # Prefer the last header (often the specific project name, not generic title)
-            return candidates[-1]
+            if not txt or len(txt) < 3:
+                continue
+
+            tnorm = txt.strip().lower()
+            if tnorm in BAD_TITLES:
+                continue
+            # Skip obvious non-names
+            if "sqm" in tnorm or "php" in tnorm:
+                continue
+
+            idx = full_text.find(txt)
+            if idx == -1:
+                continue
+
+            # Prefer headings that appear BEFORE "As of"
+            if asof_pos is not None and idx > asof_pos:
+                continue
+
+            candidates.append((idx, txt))
+
+    if candidates:
+        # Pick the closest heading BEFORE "As of"
+        candidates.sort(key=lambda x: x[0])
+        return candidates[-1][1]
+
+    # Fallback: try first meaningful h3/h2 anyway (but filtered)
+    for tag in ["h3", "h2", "h1"]:
+        for h in details_soup.find_all(tag):
+            txt = " ".join(h.get_text(" ", strip=True).split())
+            if txt and txt.strip().lower() not in BAD_TITLES and len(txt) >= 3:
+                return txt
 
     if details_soup.title and details_soup.title.string:
         return " ".join(details_soup.title.string.strip().split())
 
     return "Unknown Project"
-
 
 def fetch_details_asof(details_url: str) -> Tuple[str, Optional[datetime], str]:
     """
@@ -285,6 +321,53 @@ def scan_job() -> None:
                 tg_send(f"⚠️ Pag-IBIG scanner error (loc={loc}): {e}")
             except Exception:
                 pass
+
+def get_latest_properties_by_loc_live() -> str:
+    """
+    LIVE: For each loc, checks all project Details pages and returns
+    the newest project name + its 'As of' date.
+    """
+    lines = ["🔥 Latest 4PH Properties (LIVE)", ""]
+
+    for loc, list_url in URLS.items():
+        try:
+            list_soup = fetch_soup(list_url)
+            detail_urls = extract_details_links(list_soup)
+
+            latest_dt = None
+            latest_name = None
+            latest_url = None
+            latest_asof_str = "Unknown"
+
+            for durl in detail_urls:
+                try:
+                    name, asof_dt, asof_str = fetch_details_asof(durl)
+                    if asof_dt is None:
+                        continue
+
+                    if latest_dt is None or asof_dt > latest_dt:
+                        latest_dt = asof_dt
+                        latest_name = name
+                        latest_url = durl
+                        latest_asof_str = asof_str
+                except Exception:
+                    continue
+
+            lines.append(f"🏠 loc={loc}")
+            if latest_dt is None:
+                lines.append("❌ No valid per-project 'As of' found.")
+            else:
+                lines.append(f"✅ Latest property: {latest_name}")
+                lines.append(f"📅 As of: {latest_asof_str}")
+                lines.append(f"🔗 {latest_url}")
+            lines.append("")
+
+        except Exception as e:
+            lines.append(f"🏠 loc={loc}")
+            lines.append(f"❌ Live fetch failed: {e}")
+            lines.append("")
+
+    return "\n".join(lines)
 
 
 def main():
