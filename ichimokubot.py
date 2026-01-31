@@ -315,6 +315,7 @@ def status1d(update, context):
     tf_label, interval = "1d", TIMEFRAMES["1d"]
     update.message.reply_text("⏳ Scanning 1D Ichimoku + CRT ...")
     buy_msgs, sell_msgs, manila_tz = [], [], timezone(timedelta(hours=8))
+    
     for sym in SYMBOLS:
         try:
             df = fetch_ohlcv(sym, interval)
@@ -327,16 +328,33 @@ def status1d(update, context):
                    f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n\n{format_checklist(a)}")
             (buy_msgs if a["signal"]=="BUY" else sell_msgs).append(msg)
         except Exception: continue
-    if buy_msgs: update.message.reply_text("🟩 *STRONG BUYs*\n\n"+"\n\n".join(buy_msgs), parse_mode="Markdown")
-    if sell_msgs: update.message.reply_text("🟥 *STRONG SELLs*\n\n"+"\n\n".join(sell_msgs), parse_mode="Markdown")
-    if not buy_msgs and not sell_msgs: update.message.reply_text("⚪ No 1D 4/4 signals found.")
+    
+    # ✅ Send in batches of 5 coins per message
+    def send_in_batches(msgs, title):
+        if not msgs:
+            return
+        batch_size = 5
+        for i in range(0, len(msgs), batch_size):
+            batch = msgs[i:i+batch_size]
+            header = f"{title} ({i+1}-{min(i+batch_size, len(msgs))} of {len(msgs)})\n\n"
+            update.message.reply_text(
+                header + "\n\n".join(batch), 
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+    
+    send_in_batches(buy_msgs, "🟩 *STRONG BUYs*")
+    send_in_batches(sell_msgs, "🟥 *STRONG SELLs*")
+    
+    if not buy_msgs and not sell_msgs: 
+        update.message.reply_text("⚪ No 1D 4/4 signals found.")
     update.message.reply_text("✅ 1D scan complete.")
-
 # ---------------- STATUS 1W ----------------
 def status1w(update, context):
     tf_label, interval = "1w", TIMEFRAMES["1w"]
     update.message.reply_text("⏳ Scanning 1W Ichimoku + CRT ...")
     buy_msgs, sell_msgs, manila_tz = [], [], timezone(timedelta(hours=8))
+    
     for sym in SYMBOLS:
         try:
             df = fetch_ohlcv(sym, interval)
@@ -349,9 +367,26 @@ def status1w(update, context):
                    f"🔗 [TradingView]({tradingview_link(sym, tf_label)})\n\n{format_checklist(a)}")
             (buy_msgs if a["signal"]=="BUY" else sell_msgs).append(msg)
         except Exception: continue
-    if buy_msgs: update.message.reply_text("🟩 *STRONG BUYs (1W)*\n\n"+"\n\n".join(buy_msgs), parse_mode="Markdown")
-    if sell_msgs: update.message.reply_text("🟥 *STRONG SELLs (1W)*\n\n"+"\n\n".join(sell_msgs), parse_mode="Markdown")
-    if not buy_msgs and not sell_msgs: update.message.reply_text("⚪ No 1W 4/4 signals found.")
+    
+    # ✅ Send in batches
+    def send_in_batches(msgs, title):
+        if not msgs:
+            return
+        batch_size = 5
+        for i in range(0, len(msgs), batch_size):
+            batch = msgs[i:i+batch_size]
+            header = f"{title} ({i+1}-{min(i+batch_size, len(msgs))} of {len(msgs)})\n\n"
+            update.message.reply_text(
+                header + "\n\n".join(batch), 
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+    
+    send_in_batches(buy_msgs, "🟩 *STRONG BUYs (1W)*")
+    send_in_batches(sell_msgs, "🟥 *STRONG SELLs (1W)*")
+    
+    if not buy_msgs and not sell_msgs: 
+        update.message.reply_text("⚪ No 1W 4/4 signals found.")
     update.message.reply_text("✅ 1W scan complete.")
 # ----------------STATUS VOL-----------------------
 def statusvolume(update, context):
@@ -389,7 +424,7 @@ def main():
     dp.add_handler(CommandHandler("statusvolume", statusvolume))
     dp.add_handler(CommandHandler("pagibiglatest", pagibiglatest))
     jq = updater.job_queue
-    jq.run_repeating(check_and_alert, interval=60, first=10)
+    jq.run_repeating(check_and_alert, interval=300, first=10)
     jq.run_repeating(heartbeat, interval=14400, first=20)
     jq.run_repeating(refresh_pairs, interval=14400, first=60)
     updater.start_polling()
