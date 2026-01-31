@@ -4,6 +4,7 @@ import logging
 import requests
 import pandas as pd
 import numpy as np
+import time
 import pagibig_scanner
 from datetime import datetime, timezone, timedelta
 from telegram import Update
@@ -250,66 +251,77 @@ def status(update, context):
 def check_and_alert(context):
     global last_signals
     bot = context.bot
+    
+    signals_to_save = {}  # ✅ Collect changes, don't save yet
+    messages_sent = 0
 
     for symbol in SYMBOLS:
         for tf_label, interval in TIMEFRAMES.items():
-            df = fetch_ohlcv(symbol, interval)
-            if df is None or len(df) < 104:
+            try:
+                df = fetch_ohlcv(symbol, interval)
+                if df is None or len(df) < 104:
+                    continue
+
+                analysis = analyze_df(df)
+                sig = analysis["signal"]
+                k = key_for(symbol, tf_label)
+
+                crt_tag = "CRT_BULL" if analysis.get("crt_bull") else ("CRT_BEAR" if analysis.get("crt_bear") else "CRT_NONE")
+                sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}|{crt_tag}"
+                prev = last_signals.get(k)
+
+                # Combined alert
+                if (sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4):
+                    if prev != sent_label:
+                        tv = tradingview_link(symbol, tf_label)
+                        
+                        msg = f"🚨 *{symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*{volume_tag(symbol)}\n\n"
+                        
+                        if analysis.get("crt_bull") or analysis.get("crt_bear"):
+                            crt_type = "Bullish" if analysis.get("crt_bull") else "Bearish"
+                            msg += f"🕯️ *CRT {crt_type} ALIGNED!*\n\n"
+                        
+                        msg += f"💰 *Price:* {analysis['price']:.2f}\n"
+                        msg += f"📊 *RSI:* {analysis['rsi']:.2f}\n"
+                        msg += f"🔗 [View on TradingView]({tv})\n\n"
+                        msg += format_checklist(analysis)
+                        
+                        try:
+                            bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                            messages_sent += 1
+                            signals_to_save[k] = sent_label  # ✅ Queue for saving
+                            
+                            # ✅ Rate limit Telegram messages
+                            if messages_sent % 10 == 0:
+                                logging.info(f"Sent {messages_sent} messages, pausing 2s...")
+                                import time
+                                time.sleep(2)
+                                
+                        except Exception as e:
+                            logging.error(f"Failed to send message for {symbol} {tf_label}: {e}")
+
+                # Exit alerts
+                elif prev and ("BUY|4|0" in prev or "SELL|0|4" in prev):
+                    if not ((sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4)):
+                        msg = (
+                            f"⚪ *{symbol}* ({tf_label}) — exited strong {prev.split('|')[0]} zone.\n"
+                            f"Now: {sig} ({analysis['bull_count']}/4 bull, {analysis['bear_count']}/4 bear)"
+                        )
+                        try:
+                            bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+                            signals_to_save[k] = sent_label
+                        except Exception as e:
+                            logging.error(f"Failed to send exit message for {symbol} {tf_label}: {e}")
+
+            except Exception as e:
+                logging.error(f"Error processing {symbol} {tf_label}: {e}")
                 continue
 
-            analysis = analyze_df(df)
-            sig = analysis["signal"]
-            k = key_for(symbol, tf_label)
-
-            crt_tag = "CRT_BULL" if analysis.get("crt_bull") else ("CRT_BEAR" if analysis.get("crt_bear") else "CRT_NONE")
-            sent_label = f"{sig}|{analysis['bull_count']}|{analysis['bear_count']}|{crt_tag}"
-            prev = last_signals.get(k)
-
-            # ✅ Main Ichimoku 4/4 alert
-            if (sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4):
-                if prev != sent_label:
-                    tv = tradingview_link(symbol, tf_label)
-                    msg = (
-                        f"🚨 *{symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*{volume_tag(symbol)}\n\n"
-                        f"💰 *Price:* {analysis['price']:.2f}\n"
-                        f"📊 *RSI:* {analysis['rsi']:.2f}\n"
-                        f"🔗 [View on TradingView]({tv})\n\n"
-                        f"{format_checklist(analysis)}"
-                    )
-                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                    last_signals[k] = sent_label
-                    save_last_signals(last_signals)
-
-            # 🕯️ CRT alert ONLY if CRT aligns with Ichimoku 4/4 direction
-            aligned_bullish_crt = analysis.get("crt_bull") and (sig == "BUY" and analysis["bull_count"] == 4)
-            aligned_bearish_crt = analysis.get("crt_bear") and (sig == "SELL" and analysis["bear_count"] == 4)
-            if (aligned_bullish_crt or aligned_bearish_crt) and prev != sent_label:
-                tv = tradingview_link(symbol, tf_label)
-                side = "Bullish" if aligned_bullish_crt else "Bearish"
-                msg = (
-                    f"🕯️ *{symbol}* ({tf_label}) — CRT {side} *aligned* with Ichimoku 4/4 {sig}{volume_tag(symbol)}\n\n"
-                    f"💰 *Price:* {analysis['price']:.2f}\n"
-                    f"📊 *RSI:* {analysis['rsi']:.2f}\n"
-                    f"🔗 [View on TradingView]({tv})\n\n"
-                    f"• Prev H/L: {analysis['crt_prev_high']:.4f}/{analysis['crt_prev_low']:.4f}\n"
-                    f"• Curr H/L/Close: {analysis['crt_curr_high']:.4f}/{analysis['crt_curr_low']:.4f}/{analysis['crt_curr_close']:.4f}\n\n"
-                    f"{format_checklist(analysis)}"
-                )
-                bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                last_signals[k] = sent_label
-                save_last_signals(last_signals)
-
-            # ⚪ Exit from strong zone (optional)
-            elif prev and ("BUY|4|0" in prev or "SELL|0|4" in prev):
-                if not ((sig == "BUY" and analysis["bull_count"] == 4) or (sig == "SELL" and analysis["bear_count"] == 4)):
-                    msg = (
-                        f"⚪ *{symbol}* ({tf_label}) — exited strong {prev.split('|')[0]} zone.\n"
-                        f"Now: {sig} ({analysis['bull_count']}/4 bull, {analysis['bear_count']}/4 bear)"
-                    )
-                    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
-                    last_signals[k] = sent_label
-                    save_last_signals(last_signals)
-
+    # ✅ Save ONCE at the end
+    if signals_to_save:
+        last_signals.update(signals_to_save)
+        save_last_signals(last_signals)
+        logging.info(f"✅ Scan complete. Sent {messages_sent} alerts, saved {len(signals_to_save)} signals.")
 # ---------------- STATUS 1D ----------------
 def status1d(update, context):
     tf_label, interval = "1d", TIMEFRAMES["1d"]
