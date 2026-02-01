@@ -277,9 +277,11 @@ def check_and_alert(context):
                         
                         msg = f"🚨 *{symbol}* ({tf_label}) — *{sig} (4/4 confirmed)*{volume_tag(symbol)}\n\n"
                         
-                        if analysis.get("crt_bull") or analysis.get("crt_bear"):
-                            crt_type = "Bullish" if analysis.get("crt_bull") else "Bearish"
-                            msg += f"🕯️ *CRT {crt_type} ALIGNED!*\n\n"
+                        # ✅ FIXED: Only add CRT if it MATCHES the signal direction
+                        if sig == "BUY" and analysis.get("crt_bull"):
+                            msg += f"🕯️ *CRT Bullish ALIGNED!*\n\n"
+                        elif sig == "SELL" and analysis.get("crt_bear"):
+                            msg += f"🕯️ *CRT Bearish ALIGNED!*\n\n"
                         
                         msg += f"💰 *Price:* {analysis['price']:.2f}\n"
                         msg += f"📊 *RSI:* {analysis['rsi']:.2f}\n"
@@ -294,7 +296,6 @@ def check_and_alert(context):
                             # ✅ Rate limit Telegram messages
                             if messages_sent % 10 == 0:
                                 logging.info(f"Sent {messages_sent} messages, pausing 2s...")
-                                import time
                                 time.sleep(2)
                                 
                         except Exception as e:
