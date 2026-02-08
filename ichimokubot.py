@@ -401,6 +401,84 @@ def status1w(update, context):
     if not buy_msgs and not sell_msgs: 
         update.message.reply_text("⚪ No 1W 4/4 signals found.")
     update.message.reply_text("✅ 1W scan complete.")
+
+# ---------------- STATUS ALIGNED (>=2 TFs) ----------------
+def statusaligned(update, context):
+    """
+    List coins with at least 2 timeframes aligned as STRONG BUY or STRONG SELL.
+    Scans: 1h, 4h, 1d
+    """
+    update.message.reply_text("⏳ Scanning aligned STRONG signals (1h, 4h, 1D)...")
+
+    # Only these timeframes
+    tf_scan = [("1h", TIMEFRAMES["1h"]), ("4h", TIMEFRAMES["4h"]), ("1d", TIMEFRAMES["1d"])]
+
+    aligned_buys = []   # list of (symbol, [tfs])
+    aligned_sells = []  # list of (symbol, [tfs])
+
+    for sym in SYMBOLS:
+        buy_tfs = []
+        sell_tfs = []
+
+        for tf_label, interval in tf_scan:
+            try:
+                df = fetch_ohlcv(sym, interval)
+                if df is None or len(df) < 104:
+                    continue
+
+                a = analyze_df(df)
+
+                # Strong BUY / SELL definition = 4/4 confirmed
+                if a["signal"] == "BUY" and a.get("bull_count", 0) == 4:
+                    buy_tfs.append(tf_label)
+                elif a["signal"] == "SELL" and a.get("bear_count", 0) == 4:
+                    sell_tfs.append(tf_label)
+
+            except Exception:
+                continue
+
+        # Keep only if >=2 aligned in same direction
+        if len(buy_tfs) >= 2:
+            aligned_buys.append((sym, buy_tfs))
+        if len(sell_tfs) >= 2:
+            aligned_sells.append((sym, sell_tfs))
+
+    # Sort: more aligned TFs first, then symbol
+    aligned_buys.sort(key=lambda x: (-len(x[1]), x[0]))
+    aligned_sells.sort(key=lambda x: (-len(x[1]), x[0]))
+
+    # Build message lines
+    buy_lines = [
+        f"🟩 *{sym}* — STRONG BUY aligned: *{', '.join(tfs)}*{volume_tag(sym)}"
+        for sym, tfs in aligned_buys
+    ]
+    sell_lines = [
+        f"🟥 *{sym}* — STRONG SELL aligned: *{', '.join(tfs)}*{volume_tag(sym)}"
+        for sym, tfs in aligned_sells
+    ]
+
+    # Send in batches to avoid Telegram limits
+    def send_batches(lines, title):
+        if not lines:
+            return
+        batch_size = 20  # adjust if you want shorter messages
+        for i in range(0, len(lines), batch_size):
+            batch = lines[i:i + batch_size]
+            header = f"{title} ({i+1}-{min(i+batch_size, len(lines))} of {len(lines)})\n\n"
+            update.message.reply_text(
+                header + "\n".join(batch),
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+
+    if not buy_lines and not sell_lines:
+        update.message.reply_text("⚪ No coins found with >=2 aligned STRONG signals (1h/4h/1D).")
+        return
+
+    send_batches(buy_lines, "🟩 *ALIGNED STRONG BUYs (>=2 TFs)*")
+    send_batches(sell_lines, "🟥 *ALIGNED STRONG SELLs (>=2 TFs)*")
+    update.message.reply_text("✅ /statusaligned scan complete.")
+
 # ----------------STATUS VOL-----------------------
 def statusvolume(update, context):
     """Show currently monitored top-volume coins."""
@@ -435,6 +513,7 @@ def main():
     dp.add_handler(CommandHandler("status1d", status1d))
     dp.add_handler(CommandHandler("status1w", status1w))
     dp.add_handler(CommandHandler("statusvolume", statusvolume))
+    dp.add_handler(CommandHandler("statusaligned", statusaligned))
     dp.add_handler(CommandHandler("pagibiglatest", pagibiglatest))
     jq = updater.job_queue
     jq.run_repeating(check_and_alert, interval=300, first=10)
